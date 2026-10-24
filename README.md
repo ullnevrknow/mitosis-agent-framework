@@ -245,7 +245,9 @@ mitosis-agent-framework/
 
 ## About
 
-Built by [ullnevrknow](https://github.com/ullnevrknow), a student.
+Built by **Ryan Chen** ([@ullnevrknow](https://github.com/ullnevrknow)), a student at UofC Lab School, after studying some biology and analyzing the Hugging Face incident.
+
+Contact: [yumoryanchen@gmail.com](mailto:yumoryanchen@gmail.com)
 
 ## License
 
