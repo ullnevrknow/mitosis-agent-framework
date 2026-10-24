@@ -1,0 +1,8 @@
+# Core
+pydantic>=2.7,<3
+
+# Optional: live model backend (python main.py --model anthropic)
+anthropic>=2.3,<3
+
+# Development
+pytest>=8
