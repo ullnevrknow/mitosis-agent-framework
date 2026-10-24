@@ -27,7 +27,7 @@ def test_record_run_captures_every_transition():
 
 def test_rendered_page_is_self_contained_and_round_trips():
     html = render_html([record_run(VENDOR), record_run(ROGUE)])
-    assert "__REPLAY_DATA__" not in html
+    assert html.count("__REPLAY" + "_DATA__") == 0
     assert not re.search(r'<(script|link)[^>]+(src|href)="https?://', html)  # no external assets
     data = embedded_data(html)
     assert [r["name"] for r in data["runs"]] == ["vendor", "rogue"]

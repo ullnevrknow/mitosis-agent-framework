@@ -32,9 +32,17 @@ __all__ = [
 __version__ = "0.1.0"
 
 
-def build_system(model, registry, budgets: Budgets | None = None, persist_path=None, on_event=None) -> Orchestrator:
+def build_system(
+    model,
+    registry,
+    budgets: Budgets | None = None,
+    persist_path=None,
+    on_event=None,
+    drift: DriftPolicy | None = None,
+    disabled_rules=frozenset(),
+) -> Orchestrator:
     """Wire the four components together with one shared interceptor."""
-    interceptor = Interceptor(registry.arg_models)
+    interceptor = Interceptor(registry.arg_models, drift=drift or DriftPolicy(), disabled=frozenset(disabled_rules))
     memory = MemoryManager(verifier=interceptor.verify, persist_path=persist_path)
     executor = Executor(model, registry)
     return Orchestrator(executor, interceptor, memory, budgets or Budgets(), on_event=on_event)

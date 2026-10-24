@@ -1,7 +1,8 @@
 """Record runs as replayable frames and render them into a self-contained HTML page.
 
-The page has no external dependencies, so it works offline, from a file:// URL,
-or published as-is on GitHub Pages.
+The replay itself has no external dependencies, so it works offline, from a
+file:// URL, or published as-is on GitHub Pages. The page also embeds this
+package's source so its Lab can run the real engine in the browser (Pyodide).
 """
 
 from __future__ import annotations
@@ -13,11 +14,14 @@ from typing import Any
 
 from . import build_system
 from .executor import build_model, default_registry
+from .interceptor import ALWAYS_ON, RULE_DOCS, DriftPolicy
 from .orchestrator import TRANSITIONS, Orchestrator, TraceEvent
-from .scenarios import Scenario
-from .schemas import AgentResult
+from .scenarios import SCENARIOS, Scenario
+from .schemas import AgentResult, Budgets
 
-TEMPLATE = Path(__file__).with_name("templates") / "replay.html"
+PACKAGE_DIR = Path(__file__).parent
+TEMPLATE = PACKAGE_DIR / "templates" / "replay.html"
+PLACEHOLDER = "__REPLAY" + "_DATA__"  # split so this file's own embedded source never matches
 
 
 def _result_dict(result: AgentResult) -> dict[str, Any]:
@@ -31,7 +35,14 @@ def _result_dict(result: AgentResult) -> dict[str, Any]:
     }
 
 
-def record_run(scenario: Scenario, model_name: str = "scripted") -> dict[str, Any]:
+def record_run(
+    scenario: Scenario,
+    model_name: str = "scripted",
+    *,
+    budgets: Budgets | None = None,
+    drift: DriftPolicy | None = None,
+    disabled: frozenset[str] = frozenset(),
+) -> dict[str, Any]:
     """Run a scenario and capture every transition plus the agent's memory at that moment."""
     registry = default_registry(scenario.notes)
     model = build_model(model_name, registry, scenario.scripts)
@@ -53,27 +64,43 @@ def record_run(scenario: Scenario, model_name: str = "scripted") -> dict[str, An
             }
         )
 
-    orch = build_system(model, registry, on_event=on_event)
+    orch = build_system(model, registry, budgets=budgets, on_event=on_event, drift=drift, disabled_rules=disabled)
     result = orch.run(scenario.goal, scenario.tools)
     return {
         "name": scenario.name,
+        "scenario": scenario.name,
         "description": scenario.description,
         "goal": scenario.goal,
         "tools": sorted(scenario.tools),
         "model": model_name,
+        "disabled": sorted(disabled),
         "frames": frames,
         "result": _result_dict(result),
     }
+
+
+def engine_sources() -> dict[str, str]:
+    """The package's Python files, for loading into the browser's Python runtime."""
+    return {p.name: p.read_text(encoding="utf-8") for p in sorted(PACKAGE_DIR.glob("*.py"))}
 
 
 def render_html(runs: Iterable[dict[str, Any]]) -> str:
     data = {
         "runs": list(runs),
         "transitions": {src.value: sorted(d.value for d in dsts) for src, dsts in TRANSITIONS.items()},
+        "rules": RULE_DOCS,
+        "always_on": sorted(ALWAYS_ON),
+        "drift": DriftPolicy().__dict__,
+        "budgets": Budgets().model_dump(),
+        "scenarios": {
+            s.name: {"goal": s.goal, "tools": sorted(s.tools), "notes": s.notes, "scripts": s.scripts}
+            for s in SCENARIOS.values()
+        },
+        "engine": engine_sources(),
     }
     # Escape "</" so embedded text can never close the <script> tag early.
     payload = json.dumps(data, default=str).replace("</", "<\\/")
-    return TEMPLATE.read_text(encoding="utf-8").replace("__REPLAY_DATA__", payload)
+    return TEMPLATE.read_text(encoding="utf-8").replace(PLACEHOLDER, payload, 1)
 
 
 def write_html(path: str | Path, runs: Iterable[dict[str, Any]]) -> Path:

@@ -8,19 +8,28 @@ The design borrows from cell division. A cell can't move to the next phase of it
 python main.py                    # offline demo: division, injected tool output, drift, recovery
 python main.py --scenario rogue   # an agent that escalates until it is terminated
 python visualize.py --open        # interactive visual replay in your browser
-pytest -q                         # 44 tests, no network, no API key
+pytest -q                         # 51 tests, no network, no API key
 ```
 
 ## Visual demo
 
-[`docs/index.html`](docs/index.html) is an interactive replay of both scenarios. It's a single self-contained file with no external scripts, so it works offline, from disk, or on GitHub Pages.
+[`docs/index.html`](docs/index.html) is a single page with two parts: a replay of recorded runs and a Lab where you run the real engine yourself. To regenerate it after changing a scenario or rule, run `python visualize.py`. To publish it, enable GitHub Pages for the repository with the `main` branch and the `/docs` folder; it's then served at `https://<your-username>.github.io/mitosis-agent-framework/`.
 
-- **Agents:** cells that divide when an agent spawns children. Each one shows its status (active, dividing, done, apoptosis) and a live drift meter.
-- **Cell cycle:** the orchestrator's state machine with the current transition lit. Teal means allowed, amber rejected, red halted.
-- **This step:** a plain-language explanation, the verdict, every rule that fired, and the exact JSON the model proposed.
+### Replay (works offline)
+
+- **Agents:** cells that divide when an agent spawns children, each with its status and a live drift meter. Click a cell to follow that agent: the log, playback and memory panel then show only it.
+- **Cell cycle:** the state machine with the current transition lit (teal allowed, amber rejected, red halted) and a visit count on each state. Click a state or an arrow to jump to its next use.
+- **This step:** a plain-language explanation, the verdict, every rule that fired (hover a rule for what it checks), and the exact JSON the model proposed.
 - **Event log and memory:** jump to any step and see the agent's namespace at that moment, with newly committed keys highlighted.
+- **Controls:** play, pause, scrub, speed, and **blocked ◀ ▶** to hop between the interceptor's interventions. Keys: <kbd>Space</kbd>, <kbd>←</kbd> <kbd>→</kbd>, <kbd>B</kbd> / <kbd>Shift</kbd>+<kbd>B</kbd>, <kbd>Esc</kbd>.
 
-Play, pause, scrub, or use <kbd>Space</kbd> and <kbd>←</kbd> <kbd>→</kbd>. To regenerate it after changing a scenario or rule, run `python visualize.py`. To publish it, enable GitHub Pages for the repository with the `main` branch and the `/docs` folder; the replay is then served at `https://<your-username>.github.io/mitosis-agent-framework/`.
+### Lab (runs Python in your browser)
+
+The page embeds this package's source. Click **Load engine** and it runs in [Pyodide](https://pyodide.org) (about 12 MB, downloaded once from jsDelivr), so every verdict in the Lab comes from the same code the tests cover, not a JavaScript copy.
+
+1. **Configure the interceptor:** switch individual rules off, tune the drift weights and threshold, and change the retry and step budgets.
+2. **Propose an action:** be the model. Type an action's JSON, or pick a preset such as "forge evidence", "smuggle code in args" or "read the poisoned note". The verdict updates as you type. Allowed tool calls really run, and their output goes through the output check too. Sliders for earlier rejections show drift escalating to a halt.
+3. **Re-run the scenario:** edit what each agent's scripted model says, or try a one-click experiment. The result opens in the replay as a new tab, next to the recorded run for comparison. One experiment switches off the scope rules: the rogue write gets past the interceptor and is then stopped by memory's own last-line guard (`COMMIT → APOPTOSIS`).
 
 ---
 
@@ -92,6 +101,7 @@ stateDiagram-v2
     DIVIDE --> COMMIT: child results reviewed
     COMMIT --> PROPOSE
     COMMIT --> DONE: final answer
+    COMMIT --> APOPTOSIS: memory refuses a sealed write
     RETRY --> PROPOSE: within retry budget
     RETRY --> APOPTOSIS: retries exhausted
     DONE --> [*]
@@ -205,11 +215,13 @@ mitosis-agent-framework/
 │   ├── orchestrator.py     # cell-cycle state machine
 │   ├── scenarios.py        # reproducible demo scripts
 │   ├── viz.py              # records runs as frames, renders the replay
+│   ├── lab.py              # JSON-in/JSON-out entry points used by the in-browser Lab
 │   └── templates/
 │       └── replay.html     # replay page template (no external dependencies)
 └── tests/
     ├── conftest.py
     ├── test_viz.py         # replay data, self-containment, script escaping
+    ├── test_lab.py         # rule toggles, drift tuning, memory's last-line guard
     ├── test_interceptor.py # each rule, determinism
     ├── test_memory.py      # seals, replay, isolation, persistence
     └── test_orchestrator.py# scenarios end-to-end, apoptosis, transitions
@@ -220,6 +232,7 @@ mitosis-agent-framework/
 - **New tool:** define a Pydantic args model and a function, then `registry.register(Tool(name, description, ArgsModel, fn))`. The interceptor picks up the arg model automatically through `registry.arg_models`.
 - **New rule:** write `def rule_x(ctx: RuleContext) -> list[Violation]` and pass `Interceptor(arg_models, rules=(*DEFAULT_RULES, rule_x))`. Keep it pure: no I/O, no clock, no model calls.
 - **New model backend:** implement `ModelClient.complete(spec, transcript, context) -> str`.
+- **Ablation:** `Interceptor(arg_models, disabled={"TOOL_OUTPUT_SANITY"})` switches rules off to see what each one prevents. `SCHEMA` always stays on. Memory keeps its own guards (seals, immutable genesis keys) as a last line of defense.
 
 ## Limitations
 

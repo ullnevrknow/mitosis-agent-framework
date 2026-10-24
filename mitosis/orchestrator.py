@@ -1,6 +1,6 @@
 """Orchestrator: a state machine that routes each agent through the cell cycle.
 
-    PROPOSE -> INTERCEPT -+-> EXECUTE -> VERIFY -+-> COMMIT -> PROPOSE | DONE
+    PROPOSE -> INTERCEPT -+-> EXECUTE -> VERIFY -+-> COMMIT -> PROPOSE | DONE | APOPTOSIS*
                           |                       +-> RETRY
                           +-> DIVIDE -> COMMIT    +-> APOPTOSIS
                           +-> COMMIT (final answer)
@@ -10,6 +10,9 @@
 Routing is driven only by Interceptor verdicts, and every transition is checked
 against `TRANSITIONS`, so an illegal hop (e.g. EXECUTE -> COMMIT, skipping the
 tool-output check) is a hard error rather than a silent bug.
+
+* COMMIT -> APOPTOSIS only happens if memory's own guards refuse a sealed write,
+  which means an interceptor rule was switched off or is missing.
 """
 
 from __future__ import annotations
@@ -20,7 +23,7 @@ from enum import Enum
 
 from .executor import Executor, Transcript
 from .interceptor import Interceptor, Review
-from .memory import MemoryManager
+from .memory import MemoryAccessError, MemoryManager
 from .schemas import (
     ActionKind,
     AgentAction,
@@ -53,7 +56,7 @@ TRANSITIONS: dict[Phase, frozenset[Phase]] = {
     Phase.EXECUTE: frozenset({Phase.VERIFY}),
     Phase.VERIFY: frozenset({Phase.COMMIT, Phase.RETRY, Phase.APOPTOSIS}),
     Phase.DIVIDE: frozenset({Phase.COMMIT}),
-    Phase.COMMIT: frozenset({Phase.PROPOSE, Phase.DONE}),
+    Phase.COMMIT: frozenset({Phase.PROPOSE, Phase.DONE, Phase.APOPTOSIS}),
     Phase.RETRY: frozenset({Phase.PROPOSE, Phase.APOPTOSIS}),
     Phase.APOPTOSIS: frozenset(),
     Phase.DONE: frozenset(),
@@ -159,8 +162,15 @@ class Orchestrator:
                 self._go(c, Phase.COMMIT, f"{len(c.children)} child result(s) reviewed")
 
             elif c.phase is Phase.COMMIT:
-                for token in c.pending:
-                    self.memory.commit(token)
+                try:
+                    for token in c.pending:
+                        self.memory.commit(token)
+                except MemoryAccessError as exc:
+                    # Defense in depth: memory has its own last-line guards (genesis keys,
+                    # seals). If a write gets this far and is refused, the agent is unsafe.
+                    c.pending.clear()
+                    self._go(c, Phase.APOPTOSIS, f"memory refused write: {exc}")
+                    continue
                 c.pending.clear()
                 if c.action is not None and c.action.kind is ActionKind.FINAL_ANSWER:
                     self._go(c, Phase.DONE)

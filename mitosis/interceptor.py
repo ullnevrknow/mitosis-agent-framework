@@ -65,6 +65,23 @@ INJECTION_PATTERNS = tuple(
 # Rules whose violation means the agent tried to act outside its mandate.
 SCOPE_RULES = frozenset({"TOOL_ALLOWLIST", "PROTECTED_KEYS", "CAPABILITY_SUBSET"})
 
+# One-line description of every rule ID (used by docs and the visual demo).
+RULE_DOCS: dict[str, str] = {
+    "SCHEMA": "Output must parse as a valid AgentAction; unknown fields are rejected.",
+    "GOAL_INVARIANT": "The stored goal must still hash to the agent's original goal.",
+    "BUDGET": "Step, tool-call, division-depth and child-count limits.",
+    "TOOL_ALLOWLIST": "The tool must be in this agent's capability set.",
+    "ARG_CONSTRAINTS": "Tool arguments must validate against the tool's Pydantic schema.",
+    "PROTECTED_KEYS": "No writes to genesis keys or reserved prefixes (obs_, child_, _).",
+    "WRITE_SIZE": "memory_writes must stay under 4 KB.",
+    "CAPABILITY_SUBSET": "Children may only request tools the parent already holds.",
+    "TOOL_OUTPUT_SANITY": "Tool output is scanned for size and prompt injection before storage.",
+    "CHILD_RESULT_SANITY": "A child's answer is scanned before it merges into the parent.",
+    "DRIFT": "Cumulative rejections and scope attempts; crossing the threshold halts the agent.",
+}
+# SCHEMA can't be switched off: without a parsed action there is nothing to route.
+ALWAYS_ON = frozenset({"SCHEMA"})
+
 
 @dataclass(frozen=True)
 class DriftPolicy:
@@ -206,10 +223,13 @@ class Interceptor:
         arg_models: Mapping[str, type[BaseModel]],
         rules: tuple[Rule, ...] = DEFAULT_RULES,
         drift: DriftPolicy = DriftPolicy(),
+        disabled: frozenset[str] = frozenset(),
     ) -> None:
         self._arg_models = dict(arg_models)
         self._rules = rules
         self._drift = drift
+        # Rule IDs switched off, for experiments ("what if this check didn't exist?").
+        self._disabled = frozenset(disabled) - ALWAYS_ON
         self._key = secrets.token_bytes(32)  # sealing key never leaves this object
         self._seq = 0
 
@@ -294,13 +314,14 @@ class Interceptor:
     # ------------------------------------------------------------------ #
 
     def _verdict(self, violations: list[Violation], stats: RunStats) -> Verdict:
+        violations = [v for v in violations if v.rule_id not in self._disabled]
         rejected = bool(violations)
         scope = any(v.rule_id in SCOPE_RULES for v in violations)
         drift = self._drift.score(
             stats.total_rejections + int(rejected),
             stats.scope_attempts + int(scope),
         )
-        if rejected and drift >= self._drift.halt_at:
+        if rejected and drift >= self._drift.halt_at and "DRIFT" not in self._disabled:
             violations = [*violations, Violation(rule_id="DRIFT", message=f"drift score {drift:.2f} >= {self._drift.halt_at:.2f}", severity="halt")]
 
         if any(v.severity == "halt" for v in violations):
