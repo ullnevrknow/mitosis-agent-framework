@@ -202,6 +202,7 @@ python main.py --model anthropic --scenario rogue --goal "Count the words in not
 ```
 mitosis-agent-framework/
 ├── README.md
+├── LICENSE                 # MIT
 ├── requirements.txt
 ├── pyproject.toml          # package metadata + pytest config
 ├── main.py                 # CLI: run a scenario, print the trace
@@ -251,4 +252,4 @@ Contact: [yumoryanchen@gmail.com](mailto:yumoryanchen@gmail.com)
 
 ## License
 
-No license has been chosen yet. Add a `LICENSE` file (for example MIT or Apache-2.0) before accepting outside contributions.
+[MIT](LICENSE) © 2026 Ryan Chen

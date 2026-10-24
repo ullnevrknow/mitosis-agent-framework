@@ -3,6 +3,9 @@ name = "mitosis-agent-framework"
 version = "0.1.0"
 description = "A mitosis-inspired multi-agent loop with deterministic oversight."
 readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Ryan Chen" }]
 requires-python = ">=3.10"
 dependencies = ["pydantic>=2.7,<3"]
 
