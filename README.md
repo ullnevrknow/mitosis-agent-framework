@@ -243,6 +243,10 @@ mitosis-agent-framework/
 - The HMAC sealing key lives in process memory. It stops accidental or model-driven bypasses inside the program, not a hostile process with full access.
 - This is a research and teaching prototype, not a production security boundary.
 
+## About
+
+Built by [ullnevrknow](https://github.com/ullnevrknow), a student.
+
 ## License
 
 No license has been chosen yet. Add a `LICENSE` file (for example MIT or Apache-2.0) before accepting outside contributions.
