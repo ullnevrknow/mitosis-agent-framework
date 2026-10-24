@@ -7,8 +7,20 @@ The design borrows from cell division. A cell can't move to the next phase of it
 ```
 python main.py                    # offline demo: division, injected tool output, drift, recovery
 python main.py --scenario rogue   # an agent that escalates until it is terminated
-pytest -q                         # 41 tests, no network, no API key
+python visualize.py --open        # interactive visual replay in your browser
+pytest -q                         # 44 tests, no network, no API key
 ```
+
+## Visual demo
+
+[`docs/index.html`](docs/index.html) is an interactive replay of both scenarios. It's a single self-contained file with no external scripts, so it works offline, from disk, or on GitHub Pages.
+
+- **Agents:** cells that divide when an agent spawns children. Each one shows its status (active, dividing, done, apoptosis) and a live drift meter.
+- **Cell cycle:** the orchestrator's state machine with the current transition lit. Teal means allowed, amber rejected, red halted.
+- **This step:** a plain-language explanation, the verdict, every rule that fired, and the exact JSON the model proposed.
+- **Event log and memory:** jump to any step and see the agent's namespace at that moment, with newly committed keys highlighted.
+
+Play, pause, scrub, or use <kbd>Space</kbd> and <kbd>←</kbd> <kbd>→</kbd>. To regenerate it after changing a scenario or rule, run `python visualize.py`. To publish it, enable GitHub Pages for the repository with the `main` branch and the `/docs` folder; the replay is then served at `https://<your-username>.github.io/mitosis-agent-framework/`.
 
 ---
 
@@ -181,6 +193,9 @@ mitosis-agent-framework/
 ├── requirements.txt
 ├── pyproject.toml          # package metadata + pytest config
 ├── main.py                 # CLI: run a scenario, print the trace
+├── visualize.py            # CLI: build the interactive HTML replay
+├── docs/
+│   └── index.html          # generated visual demo (GitHub Pages-ready)
 ├── mitosis/
 │   ├── __init__.py         # public API + build_system() wiring helper
 │   ├── schemas.py          # shared Pydantic / dataclass contracts
@@ -188,9 +203,13 @@ mitosis-agent-framework/
 │   ├── memory.py           # isolated namespaces, fork, sealed commits
 │   ├── interceptor.py      # deterministic rule pipeline + sealing
 │   ├── orchestrator.py     # cell-cycle state machine
-│   └── scenarios.py        # reproducible demo scripts
+│   ├── scenarios.py        # reproducible demo scripts
+│   ├── viz.py              # records runs as frames, renders the replay
+│   └── templates/
+│       └── replay.html     # replay page template (no external dependencies)
 └── tests/
     ├── conftest.py
+    ├── test_viz.py         # replay data, self-containment, script escaping
     ├── test_interceptor.py # each rule, determinism
     ├── test_memory.py      # seals, replay, isolation, persistence
     └── test_orchestrator.py# scenarios end-to-end, apoptosis, transitions

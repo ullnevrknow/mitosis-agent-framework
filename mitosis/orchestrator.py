@@ -72,6 +72,7 @@ class TraceEvent:
     dst: Phase
     detail: str = ""
     verdict: Verdict | None = None
+    proposal: str = ""  # raw model output, set on PROPOSE -> INTERCEPT
 
 
 @dataclass
@@ -236,7 +237,8 @@ class Orchestrator:
     def _go(self, c: _Cycle, dst: Phase, detail: str = "", verdict: Verdict | None = None) -> None:
         if dst not in TRANSITIONS[c.phase]:
             raise IllegalTransition(f"{c.spec.agent_id}: {c.phase.value} -> {dst.value}")
-        event = TraceEvent(c.spec.agent_id, c.stats.steps, c.phase, dst, detail, verdict)
+        proposal = c.raw if c.phase is Phase.PROPOSE else ""
+        event = TraceEvent(c.spec.agent_id, c.stats.steps, c.phase, dst, detail, verdict, proposal)
         self.trace.append(event)
         if self._on_event:
             self._on_event(event)
