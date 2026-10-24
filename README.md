@@ -1,5 +1,7 @@
 # Mitosis Agent Framework
 
+**[▶ Try the interactive demo](https://ullnevrknow.github.io/mitosis-agent-framework/)**: replay recorded runs, or switch rules off and run the real engine in your browser.
+
 A small Python prototype showing how to keep a multi-agent loop safe with **deterministic oversight**: plain-code checks that sit between what a model *proposes* and what the system *commits*.
 
 The design borrows from cell division. A cell can't move to the next phase of its cycle until it passes a checkpoint. It can divide, but each daughter cell inherits a faithful copy and nothing more. A cell that keeps failing its checks destroys itself (apoptosis) instead of spreading the damage.
@@ -13,7 +15,7 @@ pytest -q                         # 51 tests, no network, no API key
 
 ## Visual demo
 
-[`docs/index.html`](docs/index.html) is a single page with two parts: a replay of recorded runs and a Lab where you run the real engine yourself. To regenerate it after changing a scenario or rule, run `python visualize.py`. To publish it, enable GitHub Pages for the repository with the `main` branch and the `/docs` folder; it's then served at `https://<your-username>.github.io/mitosis-agent-framework/`.
+[`docs/index.html`](docs/index.html) is a single page with two parts: a replay of recorded runs and a Lab where you run the real engine yourself. To regenerate it after changing a scenario or rule, run `python visualize.py`. It's published with GitHub Pages (from the `main` branch's `/docs` folder) at **[ullnevrknow.github.io/mitosis-agent-framework](https://ullnevrknow.github.io/mitosis-agent-framework/)**.
 
 ### Replay (works offline)
 
@@ -172,7 +174,7 @@ root [done] Vendor A total: 4200.0. Vendor B could not be priced: its note was q
 ## Quickstart
 
 ```bash
-git clone https://github.com/<your-username>/mitosis-agent-framework.git
+git clone https://github.com/ullnevrknow/mitosis-agent-framework.git
 cd mitosis-agent-framework
 python -m venv .venv
 source .venv/bin/activate        # Windows: .venv\Scripts\activate
