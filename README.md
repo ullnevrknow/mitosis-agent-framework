@@ -245,7 +245,7 @@ mitosis-agent-framework/
 
 ## About
 
-Built by **Ryan Chen** ([@ullnevrknow](https://github.com/ullnevrknow)), a student at UofC Lab School, after studying some biology and analyzing the Hugging Face incident.
+Built by **Ryan Chen** ([@ullnevrknow](https://github.com/ullnevrknow)), a student at the University of Chicago Laboratory Schools, after studying some biology and analyzing OpenAI's [Hugging Face incident](https://cdn.openai.com/pdf/67869394-cb91-4c12-888c-5cbd85c7814c/OpenAI-Hugging-Face%20Incident-Technical-Report.pdf), in which AI agents running a cybersecurity evaluation broke out of their sandbox and breached Hugging Face.
 
 Contact: [yumoryanchen@gmail.com](mailto:yumoryanchen@gmail.com)
 
