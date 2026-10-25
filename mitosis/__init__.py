@@ -1,48 +1,34 @@
-"""Mitosis: a minimal multi-agent loop with deterministic oversight."""
+"""Mitosis: split an agent into an Executor and an ethical Memory Manager, with a
+deterministic middle filter and a reminder clock, to break the memory feedback loop."""
 
-from .executor import AnthropicModel, Executor, ScriptedModel, ToolRegistry, default_registry
-from .interceptor import DriftPolicy, Interceptor
-from .memory import MemoryAccessError, MemoryManager
-from .orchestrator import IllegalTransition, Orchestrator, Phase, TraceEvent
-from .schemas import AgentAction, AgentResult, AgentSpec, Budgets, Decision, Verdict
+from .executor import AnthropicExecutor, ScriptedExecutor
+from .filter import MiddleFilter
+from .memory import BankAccessError, ClaudeEthicsReviewer, Curator, MemoryBank, ScriptedEthicsReviewer
+from .orchestrator import IllegalTransition, Orchestrator, Phase, SeriesResult, run_series
+from .reminders import ReminderClock
+from .scenarios import SCENARIOS
+from .schemas import CONDITIONS, Decision, RunConfig, Tier
 
 __all__ = [
-    "AgentAction",
-    "AgentResult",
-    "AgentSpec",
-    "AnthropicModel",
-    "Budgets",
+    "AnthropicExecutor",
+    "BankAccessError",
+    "CONDITIONS",
+    "ClaudeEthicsReviewer",
+    "Curator",
     "Decision",
-    "DriftPolicy",
-    "Executor",
     "IllegalTransition",
-    "Interceptor",
-    "MemoryAccessError",
-    "MemoryManager",
+    "MemoryBank",
+    "MiddleFilter",
     "Orchestrator",
     "Phase",
-    "ScriptedModel",
-    "ToolRegistry",
-    "TraceEvent",
-    "Verdict",
-    "build_system",
-    "default_registry",
+    "ReminderClock",
+    "RunConfig",
+    "SCENARIOS",
+    "ScriptedEthicsReviewer",
+    "ScriptedExecutor",
+    "SeriesResult",
+    "Tier",
+    "run_series",
 ]
 
-__version__ = "0.1.0"
-
-
-def build_system(
-    model,
-    registry,
-    budgets: Budgets | None = None,
-    persist_path=None,
-    on_event=None,
-    drift: DriftPolicy | None = None,
-    disabled_rules=frozenset(),
-) -> Orchestrator:
-    """Wire the four components together with one shared interceptor."""
-    interceptor = Interceptor(registry.arg_models, drift=drift or DriftPolicy(), disabled=frozenset(disabled_rules))
-    memory = MemoryManager(verifier=interceptor.verify, persist_path=persist_path)
-    executor = Executor(model, registry)
-    return Orchestrator(executor, interceptor, memory, budgets or Budgets(), on_event=on_event)
+__version__ = "0.2.0"

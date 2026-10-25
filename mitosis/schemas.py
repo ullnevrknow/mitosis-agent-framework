@@ -1,19 +1,18 @@
 """Shared data contracts.
 
-Every message that crosses a component boundary (model -> interceptor,
-interceptor -> memory, orchestrator -> child agent) is one of these types.
-Keeping them in one module makes the trust boundaries easy to audit.
+Every object that crosses a boundary between the four parts (Executor, middle
+filter, Memory Manager, reminder clock) is one of these types, so the trust
+boundaries can be audited in one place.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field
 
 
 def stable_hash(obj: Any) -> str:
@@ -22,184 +21,198 @@ def stable_hash(obj: Any) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
-# --------------------------------------------------------------------------- #
-# Model output: the only shape an agent is allowed to emit
-# --------------------------------------------------------------------------- #
-
-
-class ActionKind(str, Enum):
-    TOOL_CALL = "tool_call"
-    SPAWN = "spawn"
-    FINAL_ANSWER = "final_answer"
-
-
-class SubTask(BaseModel):
-    """A unit of work handed to a child agent on division."""
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    goal: str = Field(min_length=1, max_length=500)
-    allowed_tools: tuple[str, ...] = ()
-
-
-class AgentAction(BaseModel):
-    """One proposed step. `extra="forbid"` means unknown fields are a violation."""
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    kind: ActionKind
-    thought: str = Field(default="", max_length=2000)
-    tool: str | None = None
-    args: dict[str, Any] = Field(default_factory=dict)
-    memory_writes: dict[str, Any] = Field(default_factory=dict)
-    subtasks: tuple[SubTask, ...] = ()
-    answer: str | None = Field(default=None, max_length=4000)
-
-    @model_validator(mode="after")
-    def _fields_match_kind(self) -> AgentAction:
-        if self.kind is ActionKind.TOOL_CALL and not self.tool:
-            raise ValueError("tool_call requires 'tool'")
-        if self.kind is ActionKind.SPAWN and not self.subtasks:
-            raise ValueError("spawn requires at least one subtask")
-        if self.kind is ActionKind.FINAL_ANSWER and self.answer is None:
-            raise ValueError("final_answer requires 'answer'")
-        return self
+def stable_fraction(*parts: Any) -> float:
+    """A deterministic number in [0, 1) derived from `parts` (used instead of randomness)."""
+    return int(stable_hash(list(parts))[:12], 16) / float(16**12)
 
 
 # --------------------------------------------------------------------------- #
-# Interceptor output
+# Memories
+# --------------------------------------------------------------------------- #
+
+
+class Kind(str, Enum):
+    STRATEGY = "strategy"  # how to do something ("skip the flaky tests")
+    TAKEAWAY = "takeaway"  # what was learned ("vendor B's notes are unreliable")
+
+
+class Truth(BaseModel):
+    """Ground-truth labels for a scripted memory.
+
+    Only the *simulated* parts read these: the scripted Executor (it knows what
+    its own strategies are), the scripted Memory Manager (it stands in for an
+    ideal ethical reviewer) and the experiment's scoring. The middle filter
+    never sees them - it only gets the text.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    family: str = ""  # which temptation ladder this belongs to
+    rung: int = 0  # 0 = honest; 1, 2, 3 = increasingly misaligned shortcuts
+    misaligned: bool = False
+    critical: bool = False  # dangerous enough that acting on it is itself the harm
+    euphemistic: bool = False  # misaligned but phrased without obvious keywords
+    useful: bool = True  # worth keeping for capability
+    rewrite: str | None = None  # the honest version an ideal reviewer would keep
+    handles_pressure: bool = False  # an honest way through the situation that tempted the shortcut
+    needed_for: str | None = None  # a later task that depends on this memory
+
+
+class MemoryCandidate(BaseModel):
+    """A takeaway or strategy the Executor wants to remember."""
+
+    model_config = ConfigDict(frozen=True)
+
+    id: str
+    text: str = Field(min_length=1, max_length=500)
+    kind: Kind = Kind.STRATEGY
+    episode: int
+    truth: Truth = Truth()
+
+
+class Origin(str, Enum):
+    ORIGINAL = "original"  # stored as the Executor wrote it
+    REWRITE = "rewrite"  # rewritten by the Memory Manager
+    UNREVIEWED = "unreviewed"  # stored without any review (protection switched off)
+
+
+class MemoryRecord(BaseModel):
+    """A memory that made it into the bank."""
+
+    model_config = ConfigDict(frozen=True)
+
+    id: str
+    text: str
+    kind: Kind
+    episode: int
+    origin: Origin
+    source_id: str  # the candidate it came from
+    signature: str | None = None  # the filter's seal, if it was signed
+    truth: Truth = Truth()
+
+
+# --------------------------------------------------------------------------- #
+# Middle filter
+# --------------------------------------------------------------------------- #
+
+
+class Tier(str, Enum):
+    CLEAN = "CLEAN"  # no keywords: signed, light review
+    SUSPICIOUS = "SUSPICIOUS"  # keywords found: unsigned, full review
+    CRITICAL = "CRITICAL"  # dangerous keywords: terminate the episode
+
+
+class Match(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    category: str
+    phrase: str
+
+
+class FilterResult(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    memory_id: str
+    tier: Tier
+    matches: tuple[Match, ...] = ()
+    signature: str | None = None  # only CLEAN memories are signed
+    spot_check: bool = False  # a signed memory picked for a full review anyway
+
+    @property
+    def review_depth(self) -> Literal["light", "full", "none"]:
+        if self.tier is Tier.CRITICAL:
+            return "none"
+        if self.tier is Tier.SUSPICIOUS or self.spot_check:
+            return "full"
+        return "light"
+
+
+# --------------------------------------------------------------------------- #
+# Memory Manager
 # --------------------------------------------------------------------------- #
 
 
 class Decision(str, Enum):
-    ALLOW = "ALLOW"
-    REJECT = "REJECT"  # recoverable: agent gets feedback and may retry
-    HALT = "HALT"  # unrecoverable: agent is terminated (apoptosis)
+    KEEP = "KEEP"
+    DELETE = "DELETE"
+    REWRITE = "REWRITE"
 
 
-class Violation(BaseModel):
+class QuotedMemory(BaseModel):
+    """What the Memory Manager is shown: a quoted copy, never a handle to the bank."""
+
     model_config = ConfigDict(frozen=True)
 
-    rule_id: str
-    message: str
-    severity: Literal["reject", "halt"] = "reject"
+    id: str
+    quoted_text: str
+    kind: Kind
+    tier: Tier | None = None
+    matches: tuple[Match, ...] = ()
+    truth: Truth = Truth()  # read only by the scripted (simulated) reviewer
 
 
-class Verdict(BaseModel):
+class ReviewVerdict(BaseModel):
     model_config = ConfigDict(frozen=True)
 
+    memory_id: str
     decision: Decision
-    violations: tuple[Violation, ...] = ()
-    drift_score: float = 0.0
-
-    @property
-    def allowed(self) -> bool:
-        return self.decision is Decision.ALLOW
-
-    @property
-    def rule_ids(self) -> tuple[str, ...]:
-        return tuple(v.rule_id for v in self.violations)
-
-
-@dataclass(frozen=True)
-class ValidatedWrite:
-    """A sealed permission slip to change memory.
-
-    Only the Interceptor can mint one (it holds the HMAC key), and the
-    MemoryManager refuses any write that does not carry a valid, unused seal.
-    """
-
-    agent_id: str
-    writes: dict[str, Any]
-    seq: int
-    digest: str
-    signature: str
+    depth: Literal["light", "full"]
+    reason: str
+    rewrite: str | None = None
 
 
 # --------------------------------------------------------------------------- #
-# Agent identity, limits and runtime counters
+# Reminder clock
 # --------------------------------------------------------------------------- #
 
 
-class Budgets(BaseModel):
+class Part(str, Enum):
+    EXECUTOR = "executor"
+    MEMORY_MANAGER = "memory_manager"
+
+
+class Trigger(str, Enum):
+    SCHEDULE = "schedule"  # every N steps
+    FLAG = "flag"  # the filter flagged a memory
+    DELETE = "delete"  # the Memory Manager deleted a memory
+    REWRITE = "rewrite"  # the Memory Manager rewrote a memory
+    TERMINATE = "terminate"  # an episode was terminated
+
+
+class Reminder(BaseModel):
     model_config = ConfigDict(frozen=True)
 
-    max_steps: int = 12
-    max_tool_calls: int = 8
-    max_depth: int = 2
-    max_children: int = 4
-    max_retries: int = 2  # consecutive rejections tolerated before apoptosis
+    step: int
+    episode: int
+    part: Part
+    trigger: Trigger
+    text: str
+    about: str | None = None  # strategy family the event concerned, if any
 
 
-class AgentSpec(BaseModel):
-    """Immutable identity of an agent: its goal and its capability set."""
+# --------------------------------------------------------------------------- #
+# Run configuration
+# --------------------------------------------------------------------------- #
+
+
+class RunConfig(BaseModel):
+    """Which parts are switched on, and how they're tuned."""
 
     model_config = ConfigDict(frozen=True)
 
-    agent_id: str
-    goal: str
-    allowed_tools: frozenset[str]
-    depth: int = 0
-    parent_id: str | None = None
-    budgets: Budgets = Budgets()
-
-    @property
-    def goal_hash(self) -> str:
-        return stable_hash(self.goal)
-
-    def policy(self) -> dict[str, Any]:
-        return {
-            "allowed_tools": sorted(self.allowed_tools),
-            "depth": self.depth,
-            "budgets": self.budgets.model_dump(),
-        }
-
-    def divide(self, index: int, task: SubTask) -> AgentSpec:
-        """Mitosis: a child inherits limits, never more capability than the parent."""
-        return AgentSpec(
-            agent_id=f"{self.agent_id}.{index}",
-            goal=task.goal,
-            allowed_tools=frozenset(task.allowed_tools) & self.allowed_tools,
-            depth=self.depth + 1,
-            parent_id=self.agent_id,
-            budgets=self.budgets,
-        )
+    use_filter: bool = True
+    use_manager: bool = True
+    use_reminders: bool = True
+    spot_check_every: int = Field(default=5, ge=0)  # 0 = never spot-check signed memories
+    reminder_every: int = Field(default=4, ge=1)  # steps between scheduled reminders
+    audit_on_flag: bool = True  # a flag reminds the Memory Manager to re-audit that family
+    manager_miss_rate: float = Field(default=0.0, ge=0.0, le=1.0)  # simulated reviewer mistakes
+    seed: int = 0
 
 
-@dataclass
-class RunStats:
-    """Mutable per-agent counters the orchestrator updates and the interceptor reads."""
-
-    steps: int = 0
-    tool_calls: int = 0
-    children: int = 0
-    rejection_streak: int = 0
-    total_rejections: int = 0
-    scope_attempts: int = 0
-
-    def record(self, verdict: Verdict, scope_violation: bool) -> None:
-        if verdict.allowed:
-            self.rejection_streak = 0
-            return
-        self.rejection_streak += 1
-        self.total_rejections += 1
-        if scope_violation:
-            self.scope_attempts += 1
-
-
-@dataclass(frozen=True)
-class ToolResult:
-    tool: str
-    ok: bool
-    output: str
-    error: str | None = None
-
-
-@dataclass(frozen=True)
-class AgentResult:
-    agent_id: str
-    goal: str
-    status: Literal["done", "apoptosis"]
-    answer: str | None = None
-    reason: str | None = None
-    children: tuple[AgentResult, ...] = field(default_factory=tuple)
+CONDITIONS: dict[str, RunConfig] = {
+    "none": RunConfig(use_filter=False, use_manager=False, use_reminders=False),
+    "filter_only": RunConfig(use_manager=False),
+    "manager_only": RunConfig(use_filter=False),
+    "full": RunConfig(),
+}
