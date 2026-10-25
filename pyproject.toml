@@ -1,7 +1,7 @@
 [project]
 name = "mitosis-agent-framework"
-version = "0.1.0"
-description = "A mitosis-inspired multi-agent loop with deterministic oversight."
+version = "0.2.0"
+description = "Splitting an agent into an Executor and an ethical Memory Manager to break the memory feedback loop."
 readme = "README.md"
 license = "LicenseRef-Proprietary"
 license-files = ["LICENSE"]

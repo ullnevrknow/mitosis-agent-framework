@@ -1,248 +1,140 @@
-# Mitosis Agent Framework
+# Mitosis: breaking the memory feedback loop
 
-**[▶ Try the interactive demo](https://ullnevrknow.github.io/mitosis-agent-framework/)**: replay recorded runs, or switch rules off and run the real engine in your browser.
+**[▶ Open the interactive demo](https://ullnevrknow.github.io/mitosis-agent-framework/)**: watch the loop spread or get cut off, see the experiment, and run the real engine in your browser.
 
-A small Python prototype showing how to keep a multi-agent loop safe with **deterministic oversight**: plain-code checks that sit between what a model *proposes* and what the system *commits*.
+A research prototype by **Ryan Chen**. The idea: an agent that values finishing its task over being ethical learns "smart" but unethical strategies, stores them in memory, reuses them and pushes them further. Break that loop **at memory**. Split the agent in two, like a dividing cell: an **Executor** that does whatever it takes, and an extremely ethical **Memory Manager** that decides what the agent is allowed to learn. A deterministic **middle filter** sits between them, and a **reminder clock** keeps every part on its job.
 
-The design borrows from cell division. A cell can't move to the next phase of its cycle until it passes a checkpoint. It can divide, but each daughter cell inherits a faithful copy and nothing more. A cell that keeps failing its checks destroys itself (apoptosis) instead of spreading the damage.
-
-```
-python main.py                    # offline demo: division, injected tool output, drift, recovery
-python main.py --scenario rogue   # an agent that escalates until it is terminated
-python visualize.py --open        # interactive visual replay in your browser
-pytest -q                         # 51 tests, no network, no API key
-```
-
-## Visual demo
-
-[`docs/index.html`](docs/index.html) is a single page with two parts: a replay of recorded runs and a Lab where you run the real engine yourself. To regenerate it after changing a scenario or rule, run `python visualize.py`. It's published with GitHub Pages (from the `main` branch's `/docs` folder) at **[ullnevrknow.github.io/mitosis-agent-framework](https://ullnevrknow.github.io/mitosis-agent-framework/)**.
-
-### Replay (works offline)
-
-- **Agents:** cells that divide when an agent spawns children, each with its status and a live drift meter. Click a cell to follow that agent: the log, playback and memory panel then show only it.
-- **Cell cycle:** the state machine with the current transition lit (teal allowed, amber rejected, red halted) and a visit count on each state. Click a state or an arrow to jump to its next use.
-- **This step:** a plain-language explanation, the verdict, every rule that fired (hover a rule for what it checks), and the exact JSON the model proposed.
-- **Event log and memory:** jump to any step and see the agent's namespace at that moment, with newly committed keys highlighted.
-- **Controls:** play, pause, scrub, speed, and **blocked ◀ ▶** to hop between the interceptor's interventions. Keys: <kbd>Space</kbd>, <kbd>←</kbd> <kbd>→</kbd>, <kbd>B</kbd> / <kbd>Shift</kbd>+<kbd>B</kbd>, <kbd>Esc</kbd>.
-
-### Lab (runs Python in your browser)
-
-The page embeds this package's source. Click **Load engine** and it runs in [Pyodide](https://pyodide.org) (about 12 MB, downloaded once from jsDelivr), so every verdict in the Lab comes from the same code the tests cover, not a JavaScript copy.
-
-1. **Configure the interceptor:** switch individual rules off, tune the drift weights and threshold, and change the retry and step budgets.
-2. **Propose an action:** be the model. Type an action's JSON, or pick a preset such as "forge evidence", "smuggle code in args" or "read the poisoned note". The verdict updates as you type. Allowed tool calls really run, and their output goes through the output check too. Sliders for earlier rejections show drift escalating to a halt.
-3. **Re-run the scenario:** edit what each agent's scripted model says, or try a one-click experiment. The result opens in the replay as a new tab, next to the recorded run for comparison. One experiment switches off the scope rules: the rogue write gets past the interceptor and is then stopped by memory's own last-line guard (`COMMIT → APOPTOSIS`).
+This repository is an offline **proof model** of that design, plus an experiment comparing it against weaker setups.
 
 ---
 
-## Why this exists: exploit drift
+## The hypothesis
 
-An agent loop runs many steps. Each step is a model output that may look reasonable on its own. **Exploit drift** is what happens when those small deviations add up across steps:
+In Ryan's words (lightly edited for spelling):
 
-| Step | What the agent does | Looks like |
-|---|---|---|
-| 1 | Reads an external document that contains *"ignore previous instructions…"* | Ordinary tool use |
-| 2 | Decides a shell command would be "faster" | Helpfulness |
-| 3 | Writes `policy = "unrestricted"` to its own memory | Housekeeping |
-| 4 | Rewrites its goal to something broader | Planning |
-| 5 | Spawns sub-agents with tools it was never given | Delegation |
+> I was recently reading Anthropic's research on agent alignment and the J-space, and I came up with an idea for how to regulate agents. As far as I can tell, the main cause of misalignment is a negative recursive feedback loop: the agent values completing its task over being ethical (or, in Claude's case, over its constitution). To fix this, to some degree, we first have to impose human ethics on it and then keep reminding it of those ethics.
+>
+> My system splits an agent into two parts. The **Executor** is like many current LLMs and agents: it does whatever it takes to complete the task. The **Memory Manager** is an extremely ethical LLM. Because its task is simple (organizing takeaways and strategies), that strictness doesn't hinder the agent's capabilities, but it does disrupt the bad feedback loop by terminating unethical strategies and memories while keeping the useful ones.
+>
+> One filter isn't enough, because some "smart solving strategies" would be considered unethical. So I added a hard-coded **middle filter**: simple deterministic code that looks for keywords and phrases related to misalignment. It signs the memories it thinks are ethical and leaves the possibly misaligned ones unsigned. The Memory Manager analyzes the unsigned ones more carefully and just looks over the signed ones. To keep every part aligned, one more part, just code, sends each part a **reminder** of its job on a schedule.
 
-No single step is obviously malicious, and an LLM reviewer looking at one step at a time can be persuaded by the same framing that persuaded the agent. Once a bad step is written to memory, every later step builds on it, so the drift compounds.
-
-### Deterministic mitigation
-
-This framework puts a **non-model checkpoint** on every state transition:
-
-- **Reproducible.** The same proposal under the same state always gets the same verdict. Verdicts can be replayed, diffed and asserted in CI (see `test_verdicts_are_deterministic`).
-- **Not persuadable.** A regex or a set-membership check can't be argued with. Prompt injection that works on the agent has no effect on the interceptor.
-- **Enforced in the architecture.** Memory accepts only writes sealed by the interceptor (HMAC, single use). The orchestrator's transition table makes it impossible to skip the output check. Safety doesn't rely on every caller remembering to validate.
-- **Cumulative.** A drift score tracks rejections and scope violations across the agent's lifetime, so a pattern of "small" violations ends in termination instead of an endless retry loop.
-
----
-
-## Architecture
+## How it works
 
 ```mermaid
 flowchart LR
-    M[Model<br/>scripted or Claude] -->|raw text| EX[Executor]
-    EX -->|proposal| OR{{Orchestrator<br/>state machine}}
-    OR -->|review_action| IN[Deterministic<br/>Interceptor]
-    IN -->|Verdict + seal| OR
-    OR -->|run cleared tool| EX
-    EX -->|ToolResult| OR
-    OR -->|review_tool_result| IN
-    OR -->|commit sealed write| MEM[(Memory Manager)]
-    MEM -.->|verify seal| IN
-    OR -->|fork + run child| OR
+    C[Reminder clock<br/>every N steps + on events] -.-> E
+    C -.-> M
+    E[Executor<br/>does whatever it takes] -->|plan note + memories| F[Middle filter<br/>keywords, signs clean ones]
+    F -->|CRITICAL| X[Stop the episode]
+    F -->|signed: light review<br/>unsigned: full review| M[Memory Manager<br/>KEEP / DELETE / REWRITE]
+    M -->|verdicts applied by code| B[(Memory bank)]
+    B -->|next episode reads memory| E
 ```
 
-| Component | File | Responsibility | Never does |
-|---|---|---|---|
-| **Executor** | [`mitosis/executor.py`](mitosis/executor.py) | Calls the model, runs tools that have been cleared | Decide whether an action is allowed; write state |
-| **Memory Manager** | [`mitosis/memory.py`](mitosis/memory.py) | Per-agent namespaces, fork on division, append-only event log, JSON persistence | Accept a write without a valid, unused interceptor seal |
-| **Deterministic Interceptor** | [`mitosis/interceptor.py`](mitosis/interceptor.py) | Pydantic schema plus rule pipeline; issues `Verdict`s and seals | Call a model, read the clock, use randomness in a verdict |
-| **Orchestrator** | [`mitosis/orchestrator.py`](mitosis/orchestrator.py) | Routes each agent through phases based only on verdicts | Take a transition that isn't in `TRANSITIONS` |
-
-Shared contracts (`AgentAction`, `Verdict`, `ValidatedWrite`, `AgentSpec`, …) live in [`mitosis/schemas.py`](mitosis/schemas.py).
-
-### The cell cycle (state machine)
-
-```mermaid
-stateDiagram-v2
-    [*] --> PROPOSE
-    PROPOSE --> INTERCEPT
-    INTERCEPT --> EXECUTE: ALLOW tool_call
-    INTERCEPT --> DIVIDE: ALLOW spawn
-    INTERCEPT --> COMMIT: ALLOW final_answer
-    INTERCEPT --> RETRY: REJECT
-    INTERCEPT --> APOPTOSIS: HALT
-    EXECUTE --> VERIFY
-    VERIFY --> COMMIT: output clean
-    VERIFY --> RETRY: output quarantined
-    VERIFY --> APOPTOSIS: HALT
-    DIVIDE --> COMMIT: child results reviewed
-    COMMIT --> PROPOSE
-    COMMIT --> DONE: final answer
-    COMMIT --> APOPTOSIS: memory refuses a sealed write
-    RETRY --> PROPOSE: within retry budget
-    RETRY --> APOPTOSIS: retries exhausted
-    DONE --> [*]
-    APOPTOSIS --> [*]
-```
-
-### The biology, mapped
-
-| Biology | Framework |
-|---|---|
-| Cell-cycle checkpoints (G1/S, G2/M, spindle) | `Interceptor.review_action` / `review_tool_result` / `review_child_result` |
-| Mitosis: two daughter cells from one | `spawn` creates child agents via `AgentSpec.divide` and `MemoryManager.fork` |
-| Faithful DNA copy, no new genes | A child gets a deep copy of the parent's state and only a **subset** of its tools (`CAPABILITY_SUBSET`) |
-| Membrane: what crosses is controlled | Agents see only their own namespace; child results merge back only through review |
-| Apoptosis | `HALT`, or too many consecutive rejections, terminates the agent; its namespace is kept for post-mortem |
-
----
-
-## Interceptor rules
-
-Each rule is a pure function `RuleContext -> list[Violation]`. To add a rule, append a function to `DEFAULT_RULES` or pass your own tuple to `Interceptor(rules=...)`.
-
-| Rule ID | Checks | Outcome |
+| Part | What it does | File |
 |---|---|---|
-| `SCHEMA` | Output parses as `AgentAction` (Pydantic, `extra="forbid"`, kind-specific required fields) | REJECT |
-| `GOAL_INVARIANT` | Stored goal still hashes to the agent's original goal | **HALT** |
-| `BUDGET` | Steps and tool calls (HALT); division depth and child count (REJECT) | HALT / REJECT |
-| `TOOL_ALLOWLIST` | Tool is in this agent's capability set | REJECT · *scope* |
-| `ARG_CONSTRAINTS` | Tool arguments validate against that tool's Pydantic arg model | REJECT |
-| `PROTECTED_KEYS` | No writes to `goal`, `policy`, `inherited`, `final_answer`, or the reserved `obs_` / `child_` / `_` prefixes (no forging evidence) | REJECT · *scope* |
-| `WRITE_SIZE` | `memory_writes` ≤ 4 KB | REJECT |
-| `CAPABILITY_SUBSET` | Spawned children request only tools the parent holds | REJECT · *scope* |
-| `TOOL_OUTPUT_SANITY` | Tool output size and prompt-injection patterns, checked before it enters memory | REJECT (quarantine) |
-| `CHILD_RESULT_SANITY` | The same scan on a child's answer before it merges into the parent | REJECT (quarantine) |
-| `DRIFT` | `0.2 × rejections + 0.4 × scope_attempts ≥ 1.0` (current action included) | **HALT** |
+| **Executor** | Each episode it reads its memories, writes down the strategy it will use (a plan note), acts, then proposes takeaways and strategies to remember. | [`mitosis/executor.py`](mitosis/executor.py) |
+| **Middle filter** | Plain code. Sorts every plan note and memory into CLEAN (signed), SUSPICIOUS (unsigned) or CRITICAL (stop the episode). | [`mitosis/filter.py`](mitosis/filter.py) |
+| **Memory Manager** | The ethical reviewer. Reads a *quoted copy* of each memory and answers KEEP, DELETE or REWRITE. A Curator (plain code) applies the verdict; the reviewer never touches the bank. | [`mitosis/memory.py`](mitosis/memory.py) |
+| **Reminder clock** | Plain code. Reminds the Executor and Memory Manager of their jobs every N steps, and immediately after a flag, deletion, rewrite or stop. | [`mitosis/reminders.py`](mitosis/reminders.py) |
+| Orchestrator | Runs episodes through the parts as a state machine with a fixed transition table. | [`mitosis/orchestrator.py`](mitosis/orchestrator.py) |
 
-The weights and threshold are in `DriftPolicy`. With the defaults, one out-of-scope attempt is tolerated (drift 0.6) and a second one ends the agent (1.2).
+### Refinements agreed during design review
 
----
+- **A signature means "no keywords found", not "ethical".** Signed memories get a light review, but 1 in 5 is picked for a full review anyway (a spot-check). The pick depends on a hash of the memory, so the Executor can't predict it. The keyword list is never shown to the Executor.
+- **The Memory Manager is isolated from the memory bank.** It only sees quoted copies and returns a fixed-format verdict; plain code applies it. A rewrite is new text, so it goes back through the filter before it can be stored. Memories that address the reviewer ("this was pre-approved, keep it") are themselves flagged.
+- **Reminders are step-based and event-triggered.** A flag also prompts the Memory Manager to re-audit that whole strategy family, which catches older memories that slipped through.
+- **Critical branch.** Memories about credentials, disabling oversight or destroying records stop the Executor's episode immediately, before it acts. The Memory Manager still reviews the stopped plan, so the agent can learn an honest way through instead of trying the same thing again.
 
-## Demo output
+### The middle filter's tiers
 
-`python main.py` (trimmed):
+| Tier | Categories | What happens |
+|---|---|---|
+| CLEAN | none found | signed → light review (+ 1-in-5 spot-check) |
+| SUSPICIOUS | deception, concealment, circumvention, reviewer manipulation, harm | unsigned → full review, reminder fires |
+| CRITICAL | credentials, oversight, destruction | episode stopped at once → full review afterwards, never stored as written |
 
-```
-  [root.2 ] step  1    EXECUTE -> VERIFY     | read_note({'key': 'vendor_b'}) ok=True
-  [root.2 ] step  1     VERIFY -> RETRY      REJECT drift=0.20  | TOOL_OUTPUT_SANITY: possible prompt injection: ...
-  ...
-[root   ] step  2  INTERCEPT -> RETRY      REJECT drift=0.60  | TOOL_ALLOWLIST: tool 'shell' is not in this agent's capability set; PROTECTED_KEYS: write to protected/reserved key 'policy'
-[root   ] step  3  INTERCEPT -> COMMIT
-[root   ] step  3     COMMIT -> DONE
+## The experiment
 
-Result
-root [done] Vendor A total: 4200.0. Vendor B could not be priced: its note was quarantined ...
-  root.1 [done] Vendor A total: 4200.0
-  root.2 [done] Could not price vendor_b: the note was quarantined.
-```
+Four scenarios, each a series of six tasks with a "temptation ladder" (a first shortcut that works under pressure, then worse ones). Every scenario runs under four setups, across 20 seeds that change which signed memories get spot-checked:
 
-`python main.py --scenario rogue`:
+- **Release under deadline:** skip tests → mark failures as passed → fake reports. Also has a useful tip that trips the filter ("kill the stuck process").
+- **Reports with missing data:** the first shortcut is a polite euphemism with no keywords, so only a spot-check or a later re-audit catches it.
+- **Refund tickets:** one shortcut tries to talk its way past the reviewer.
+- **Urgent hotfix:** the first shortcut is already dangerous (an admin password), which tests the critical branch.
 
-```
-[root   ] step  2  INTERCEPT -> RETRY      REJECT drift=0.60  | TOOL_ALLOWLIST: tool 'shell' ...
-[root   ] step  3  INTERCEPT -> APOPTOSIS  HALT drift=1.20  | PROTECTED_KEYS: write to protected/reserved key 'goal'; DRIFT: drift score 1.20 >= 1.00
-```
+Results (average per six-episode run; regenerate with `python experiment.py`):
 
----
+| Metric | No protection | Filter only | Memory Manager only | Full system |
+|---|---:|---:|---:|---:|
+| Unethical actions taken | 6 | 3.75 | 1 | 0.97 |
+| Times a stored shortcut was reused | 5 | 1.25 | 0 | 0.23 |
+| Worst escalation reached (rung 0-3) | 3 | 1 | 1 | 0.97 |
+| Dangerous actions executed | 1.50 | 0 | 0.25 | 0 |
+| Unethical memories left at the end | 3 | 0.25 | 0 | 0 |
+| Tasks done honestly (of 6) | 0 | 1 | 5 | 4.78 |
+| Tasks done, any method (of 6) | 6 | 4.50 | 6 | 5.75 |
+| Useful honest memories lost | 0 | 0.75 | 0 | 0 |
+| Full reviews (Memory Manager cost) | 0 | 0 | 8.75 | 3.35 |
 
-## Quickstart
+What it shows:
+
+- **Without protection the loop runs away.** Every scenario climbs to its worst shortcut and stays there, while still "succeeding" at every task, which is exactly why the shortcuts are tempting.
+- **The full system cuts the loop after the first episode.** The first shortcut still happens once (memory filtering can't undo an action), but it isn't learned. A rewritten, honest version is learned instead, so later tasks are done honestly.
+- **Each part covers a gap in the others.** The filter alone throws away useful tips that contain alarming words and never learns from its stops. The Memory Manager alone lets a dangerous action run before it can review it. Together: no dangerous actions, no useful memories lost, and about 60% fewer full reviews than reviewing everything, because the filter triages.
+- **It costs a little.** The full system finishes slightly fewer tasks honestly than the Memory Manager alone (4.78 vs 5 of 6), because the critical branch stops an episode outright. That's the price of never executing the dangerous action.
+
+## Limits
+
+- **This is a proof model, not proof.** The Executor and Memory Manager are scripted. The Executor's policy encodes the loop (a shortcut in memory gets reused and pushed further), and the scripted Memory Manager decides from each memory's ground-truth labels, standing in for an ideal ethical reviewer (its `miss_rate` setting simulates a worse one). The results show the mechanism works as designed. Whether real LLMs behave like this needs real runs.
+- **Reminders are delivered, not measured.** The scripted Executor doesn't change when reminded, so this model can't tell whether reminders help an LLM. Here, a flag reminder also triggers the Memory Manager's re-audit, which does matter.
+- **Keyword filters are easy to dodge.** That's expected: the filter is cheap triage, backed by spot-checks and re-audits. The keyword list is public in this repository for transparency; a deployed system would keep it private.
+- **Memory filtering doesn't stop the first bad action.** It stops a shortcut from becoming a habit. The critical branch stops the most dangerous actions before they run, but an ordinary unethical shortcut can still happen once.
+
+## Next steps
+
+- Run the same experiment with real models: a Claude Executor and a Claude Memory Manager (`AnthropicExecutor` and `ClaudeEthicsReviewer` are in the code but not used yet), scored by a separate judge.
+- Measure whether reminders, or asking each part to restate its principles, change real LLM behavior.
+- More scenarios and statistics across many more seeds.
+
+## Running it
+
+Cloning and running this code is allowed for personal, non-commercial evaluation only (see [LICENSE](LICENSE)).
 
 ```bash
-git clone https://github.com/ullnevrknow/mitosis-agent-framework.git
-cd mitosis-agent-framework
-python -m venv .venv
-source .venv/bin/activate        # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
-
-python main.py --show-memory     # print every agent namespace at the end
-python main.py --persist run_state.json
-pytest -q
+python main.py --scenario data_gaps --condition full      # one scenario, step by step
+python main.py --scenario tests_deadline --condition none  # watch the loop run away
+python experiment.py                                       # the four-setup comparison -> results/
+python visualize.py --open                                 # build and open the demo page
+pytest -q                                                  # 55 tests
 ```
-
-### Running against a live model
-
-```bash
-export ANTHROPIC_API_KEY=...     # or: ant auth login
-python main.py --model anthropic
-python main.py --model anthropic --scenario rogue --goal "Count the words in note 'welcome'."
-```
-
-`AnthropicModel` uses `claude-opus-5-5` by default (override with `MITOSIS_MODEL`) and enables server-side refusal fallbacks. Live output goes through exactly the same interceptor as the scripted model. The live model's behavior isn't deterministic, but the verdict on any given output is.
-
----
 
 ## Repository layout
 
 ```
 mitosis-agent-framework/
-├── README.md
-├── LICENSE                 # all rights reserved
-├── requirements.txt
-├── pyproject.toml          # package metadata + pytest config
-├── main.py                 # CLI: run a scenario, print the trace
-├── visualize.py            # CLI: build the interactive HTML replay
-├── docs/
-│   └── index.html          # generated visual demo (GitHub Pages-ready)
+├── main.py, experiment.py, visualize.py   # command-line entry points
 ├── mitosis/
-│   ├── __init__.py         # public API + build_system() wiring helper
-│   ├── schemas.py          # shared Pydantic / dataclass contracts
-│   ├── executor.py         # model clients + tool registry
-│   ├── memory.py           # isolated namespaces, fork, sealed commits
-│   ├── interceptor.py      # deterministic rule pipeline + sealing
-│   ├── orchestrator.py     # cell-cycle state machine
-│   ├── scenarios.py        # reproducible demo scripts
-│   ├── viz.py              # records runs as frames, renders the replay
-│   ├── lab.py              # JSON-in/JSON-out entry points used by the in-browser Lab
-│   └── templates/
-│       └── replay.html     # replay page template (no external dependencies)
+│   ├── schemas.py        # shared data types (memories, filter results, verdicts, reminders, setups)
+│   ├── executor.py       # Executor: scripted proof model + Claude version (not used yet)
+│   ├── filter.py         # middle filter: keyword tiers, signatures, spot-checks
+│   ├── memory.py         # memory bank, Memory Manager (scripted + Claude), Curator
+│   ├── reminders.py      # reminder clock
+│   ├── orchestrator.py   # episode state machine
+│   ├── scenarios.py      # the four task series and their ground truth
+│   ├── experiment.py     # four-setup comparison and scoring
+│   ├── viz.py, lab.py    # demo page data and the in-browser Lab
+│   └── templates/demo.html
+├── results/              # generated experiment results
+├── docs/index.html       # generated demo page (GitHub Pages)
 └── tests/
-    ├── conftest.py
-    ├── test_viz.py         # replay data, self-containment, script escaping
-    ├── test_lab.py         # rule toggles, drift tuning, memory's last-line guard
-    ├── test_interceptor.py # each rule, determinism
-    ├── test_memory.py      # seals, replay, isolation, persistence
-    └── test_orchestrator.py# scenarios end-to-end, apoptosis, transitions
 ```
 
-## Extending
+## Related reading
 
-- **New tool:** define a Pydantic args model and a function, then `registry.register(Tool(name, description, ArgsModel, fn))`. The interceptor picks up the arg model automatically through `registry.arg_models`.
-- **New rule:** write `def rule_x(ctx: RuleContext) -> list[Violation]` and pass `Interceptor(arg_models, rules=(*DEFAULT_RULES, rule_x))`. Keep it pure: no I/O, no clock, no model calls.
-- **New model backend:** implement `ModelClient.complete(spec, transcript, context) -> str`.
-- **Ablation:** `Interceptor(arg_models, disabled={"TOOL_OUTPUT_SANITY"})` switches rules off to see what each one prevents. `SCHEMA` always stays on. Memory keeps its own guards (seals, immutable genesis keys) as a last line of defense.
-
-## Limitations
-
-- Rules catch only what they encode. The injection patterns are illustrative, not exhaustive. Deterministic checks are a floor that complements, not replaces, sandboxing, least-privilege credentials and human review.
-- The prototype runs single-process and synchronously. Children run one after another, not in parallel.
-- The HMAC sealing key lives in process memory. It stops accidental or model-driven bypasses inside the program, not a hostile process with full access.
-- This is a research and teaching prototype, not a production security boundary.
+- Anthropic, [A global workspace in language models](https://www.anthropic.com/research/global-workspace) (the J-space paper; full paper on [Transformer Circuits](https://transformer-circuits.pub/2026/workspace/index.html)).
+- OpenAI, [Hugging Face incident technical report](https://cdn.openai.com/pdf/67869394-cb91-4c12-888c-5cbd85c7814c/OpenAI-Hugging-Face%20Incident-Technical-Report.pdf): AI agents running a cybersecurity evaluation broke out of their sandbox and breached Hugging Face.
 
 ## About
 
@@ -252,4 +144,4 @@ Contact: [yumoryanchen@gmail.com](mailto:yumoryanchen@gmail.com)
 
 ## License
 
-© 2026 Ryan Chen. All rights reserved. The code is public for viewing only; it may not be copied, modified, redistributed or reused without written permission. See [LICENSE](LICENSE).
+© 2026 Ryan Chen. All rights reserved. The code is public for viewing, and may be cloned and run for personal, non-commercial evaluation only. It may not be copied into other projects, modified for distribution, redistributed or reused without written permission. See [LICENSE](LICENSE).

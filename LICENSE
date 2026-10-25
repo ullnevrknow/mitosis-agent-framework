@@ -1,15 +1,22 @@
 Copyright (c) 2026 Ryan Chen. All rights reserved.
 
-This repository and everything in it (source code, documentation, diagrams and
-the interactive demo) is published for viewing only.
+This repository and everything in it (source code, documentation, diagrams,
+experiment results and the interactive demo) is published for viewing and
+personal evaluation only.
 
-No license is granted. You may not copy, modify, distribute, sublicense, sell,
-or otherwise use this software or any part of it, for any purpose, without
-prior written permission from the copyright holder.
+No license is granted beyond the permissions below. Except as stated here, you
+may not copy, modify, distribute, sublicense, sell, or otherwise use this
+software or any part of it, for any purpose, without prior written permission
+from the copyright holder.
 
-You may view the repository and use the live demo in your web browser. As
-required by GitHub's Terms of Service, other GitHub users may also view and
+Permitted:
+- Viewing the repository and using the live demo in your web browser.
+- Cloning or downloading the repository and running it on your own computer
+  for personal, non-commercial evaluation, without sharing, publishing or
+  redistributing it or any modified version.
+
+As required by GitHub's Terms of Service, other GitHub users may also view and
 fork this repository on GitHub; that does not give anyone the right to use,
-modify or redistribute its contents.
+modify or redistribute its contents beyond the permissions above.
 
 To ask for permission, contact Ryan Chen at yumoryanchen@gmail.com.

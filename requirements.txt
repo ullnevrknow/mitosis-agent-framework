@@ -1,7 +1,7 @@
 # Core
 pydantic>=2.7,<3
 
-# Optional: live model backend (python main.py --model anthropic)
+# Optional: real Claude Executor and Memory Manager (planned next phase)
 anthropic>=2.3,<3
 
 # Development
