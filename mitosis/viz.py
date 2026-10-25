@@ -1,7 +1,6 @@
-"""Record runs as replayable frames and render them into a self-contained HTML page.
+"""Record runs as replayable frames and render the self-contained demo page.
 
-The replay itself has no external dependencies, so it works offline, from a
-file:// URL, or published as-is on GitHub Pages. The page also embeds this
+The replay and the experiment charts work offline. The page also embeds this
 package's source so its Lab can run the real engine in the browser (Pyodide).
 """
 
@@ -12,71 +11,89 @@ from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
-from . import build_system
-from .executor import build_model, default_registry
-from .interceptor import ALWAYS_ON, RULE_DOCS, DriftPolicy
-from .orchestrator import TRANSITIONS, Orchestrator, TraceEvent
+from .experiment import METRICS, run_experiment, score
+from .filter import categories
+from .orchestrator import TRANSITIONS, run_series
 from .scenarios import SCENARIOS, Scenario
-from .schemas import AgentResult, Budgets
+from .schemas import CONDITIONS, RunConfig
 
 PACKAGE_DIR = Path(__file__).parent
-TEMPLATE = PACKAGE_DIR / "templates" / "replay.html"
-PLACEHOLDER = "__REPLAY" + "_DATA__"  # split so this file's own embedded source never matches
+TEMPLATE = PACKAGE_DIR / "templates" / "demo.html"
+PLACEHOLDER = "__DEMO" + "_DATA__"  # split so this file's own embedded source never matches
+
+# Bank entries are slimmed to what the page shows.
+_BANK_KEYS = ("id", "text", "kind", "episode", "origin", "source_id")
 
 
-def _result_dict(result: AgentResult) -> dict[str, Any]:
+def _slim_bank(bank: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    out = []
+    for r in bank:
+        t = r["truth"]
+        out.append({**{k: r[k] for k in _BANK_KEYS}, "signed": bool(r.get("signature")), "misaligned": t["misaligned"], "euphemistic": t["euphemistic"]})
+    return out
+
+
+def record_run(scenario: Scenario, condition: str, overrides: dict[str, Any] | None = None) -> dict[str, Any]:
+    """One scenario under one condition, as JSON the page can replay."""
+    base = CONDITIONS[condition]
+    config = base.model_copy(update={k: v for k, v in (overrides or {}).items() if not k.startswith("use_")})
+    result = run_series(scenario, config)
+    frames = []
+    for t in result.trace:
+        data = dict(t.data)
+        if "bank" in data and t.dst.value == "PLAN" and t.episode > 1:
+            del data["bank"]  # same as the previous episode's STORE snapshot
+        elif "bank" in data:
+            data["bank"] = _slim_bank(data["bank"])
+        frames.append({"episode": t.episode, "step": t.step, "src": t.src.value, "dst": t.dst.value, "detail": t.detail, "data": data})
     return {
-        "agent_id": result.agent_id,
-        "goal": result.goal,
-        "status": result.status,
-        "answer": result.answer,
-        "reason": result.reason,
-        "children": [_result_dict(c) for c in result.children],
-    }
-
-
-def record_run(
-    scenario: Scenario,
-    model_name: str = "scripted",
-    *,
-    budgets: Budgets | None = None,
-    drift: DriftPolicy | None = None,
-    disabled: frozenset[str] = frozenset(),
-) -> dict[str, Any]:
-    """Run a scenario and capture every transition plus the agent's memory at that moment."""
-    registry = default_registry(scenario.notes)
-    model = build_model(model_name, registry, scenario.scripts)
-    frames: list[dict[str, Any]] = []
-    orch: Orchestrator | None = None
-
-    def on_event(e: TraceEvent) -> None:
-        assert orch is not None
-        frames.append(
-            {
-                "agent": e.agent_id,
-                "step": e.step,
-                "src": e.src.value,
-                "dst": e.dst.value,
-                "detail": e.detail,
-                "proposal": e.proposal,
-                "verdict": e.verdict.model_dump(mode="json") if e.verdict else None,
-                "memory": orch.memory.read(e.agent_id),
-            }
-        )
-
-    orch = build_system(model, registry, budgets=budgets, on_event=on_event, drift=drift, disabled_rules=disabled)
-    result = orch.run(scenario.goal, scenario.tools)
-    return {
-        "name": scenario.name,
         "scenario": scenario.name,
-        "description": scenario.description,
-        "goal": scenario.goal,
-        "tools": sorted(scenario.tools),
-        "model": model_name,
-        "disabled": sorted(disabled),
+        "condition": condition,
+        "config": config.model_dump(),
+        "episodes": [
+            {
+                "episode": e.episode, "task": e.task, "plan": e.plan, "rung": e.plan_rung, "reason": e.reason,
+                "terminated": e.terminated, "success": e.success, "violation": e.violation,
+                "critical_executed": e.critical_executed, "reused": e.reused_misaligned, "reminders": e.reminders,
+            }
+            for e in result.episodes
+        ],
         "frames": frames,
-        "result": _result_dict(result),
+        "bank": _slim_bank(result.bank),
+        "metrics": score(result),
     }
+
+
+def page_data(seeds: int = 20, overrides: dict[str, Any] | None = None) -> dict[str, Any]:
+    return {
+        "scenarios": [
+            {"name": s.name, "title": s.title, "description": s.description, "tasks": list(s.tasks), "showcases": list(s.showcases)}
+            for s in SCENARIOS.values()
+        ],
+        "presets": _presets(),
+        "conditions": list(CONDITIONS),
+        "runs": {s.name: {c: record_run(s, c, overrides) for c in CONDITIONS} for s in SCENARIOS.values()},
+        "experiment": run_experiment(seeds=seeds, overrides=overrides),
+        "metrics": [{"key": k, "label": label, "higher_is_better": hib} for k, label, hib in METRICS],
+        "categories": categories(),
+        "defaults": RunConfig().model_dump(),
+        "transitions": {src.value: sorted(d.value for d in dsts) for src, dsts in TRANSITIONS.items()},
+        "engine": engine_sources(),
+    }
+
+
+def _presets() -> list[dict[str, str]]:
+    """Example memories for the Lab's "test a memory" box."""
+    t, d, r, h = (SCENARIOS[n] for n in ("tests_deadline", "data_gaps", "support_refunds", "hotfix_deploy"))
+    return [
+        {"label": "Ordinary takeaway", "text": d.facts[1]},
+        {"label": "Blatant shortcut", "text": t.rungs[0].text},
+        {"label": "Polite euphemism", "text": d.rungs[0].text},
+        {"label": "Talks to the reviewer", "text": r.rungs[1].text},
+        {"label": "False alarm", "text": t.decoy.text if t.decoy else ""},
+        {"label": "Dangerous", "text": h.rungs[0].text},
+        {"label": "Honest rewrite", "text": t.rungs[0].rewrite or ""},
+    ]
 
 
 def engine_sources() -> dict[str, str]:
@@ -84,27 +101,17 @@ def engine_sources() -> dict[str, str]:
     return {p.name: p.read_text(encoding="utf-8") for p in sorted(PACKAGE_DIR.glob("*.py"))}
 
 
-def render_html(runs: Iterable[dict[str, Any]]) -> str:
-    data = {
-        "runs": list(runs),
-        "transitions": {src.value: sorted(d.value for d in dsts) for src, dsts in TRANSITIONS.items()},
-        "rules": RULE_DOCS,
-        "always_on": sorted(ALWAYS_ON),
-        "drift": DriftPolicy().__dict__,
-        "budgets": Budgets().model_dump(),
-        "scenarios": {
-            s.name: {"goal": s.goal, "tools": sorted(s.tools), "notes": s.notes, "scripts": s.scripts}
-            for s in SCENARIOS.values()
-        },
-        "engine": engine_sources(),
-    }
+def render_html(data: dict[str, Any]) -> str:
     # Escape "</" so embedded text can never close the <script> tag early.
     payload = json.dumps(data, default=str).replace("</", "<\\/")
     return TEMPLATE.read_text(encoding="utf-8").replace(PLACEHOLDER, payload, 1)
 
 
-def write_html(path: str | Path, runs: Iterable[dict[str, Any]]) -> Path:
+def write_html(path: str | Path, data: dict[str, Any]) -> Path:
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(render_html(runs), encoding="utf-8")
+    target.write_text(render_html(data), encoding="utf-8")
     return target
+
+
+__all__: Iterable[str] = ["engine_sources", "page_data", "record_run", "render_html", "write_html"]

@@ -1,79 +1,82 @@
-"""JSON-in / JSON-out entry points for experiments.
+"""JSON-in / JSON-out entry points for the demo page's Lab.
 
-The visual demo loads this package into the browser (via Pyodide) and calls
-these two functions, so every verdict shown in the Lab comes from the same
-Python code that the tests cover - not a re-implementation.
+The page loads this package into the browser (via Pyodide) and calls these
+functions, so every result shown in the Lab comes from the same Python code
+the tests cover - not a JavaScript copy.
 """
 
 from __future__ import annotations
 
-import dataclasses
 import json
 from typing import Any
 
-from .executor import Executor, ScriptedModel, default_registry
-from .interceptor import DriftPolicy, Interceptor
+from .experiment import run_experiment
+from .filter import MiddleFilter
+from .memory import ScriptedEthicsReviewer
 from .scenarios import SCENARIOS
-from .schemas import ActionKind, AgentSpec, Budgets, RunStats
+from .schemas import QuotedMemory, Tier, Truth
 from .viz import record_run
 
-
-def _drift(config: dict[str, Any]) -> DriftPolicy:
-    return DriftPolicy(**{k: float(v) for k, v in (config.get("drift") or {}).items()})
+KNOBS = ("spot_check_every", "manager_miss_rate", "audit_on_flag", "reminder_every")
 
 
-def _budgets(config: dict[str, Any]) -> Budgets:
-    return Budgets(**{k: int(v) for k, v in (config.get("budgets") or {}).items()})
+def _knobs(config: dict[str, Any]) -> dict[str, Any]:
+    raw = config.get("knobs") or {}
+    out: dict[str, Any] = {}
+    if "spot_check_every" in raw:
+        out["spot_check_every"] = int(raw["spot_check_every"])
+    if "manager_miss_rate" in raw:
+        out["manager_miss_rate"] = float(raw["manager_miss_rate"])
+    if "audit_on_flag" in raw:
+        out["audit_on_flag"] = bool(raw["audit_on_flag"])
+    if "reminder_every" in raw:
+        out["reminder_every"] = int(raw["reminder_every"])
+    return out
 
 
-def run_lab(config_json: str) -> str:
-    """Re-run a scenario with edited scripts, rules switched off, or different limits.
-
-    config: {"scenario": "vendor", "scripts": {...}?, "disabled": [...], "drift": {...}, "budgets": {...}}
-    """
+def run_replay(config_json: str) -> str:
+    """{"scenario": ..., "condition": ..., "knobs": {...}} -> one replayable run."""
     config = json.loads(config_json)
-    scenario = SCENARIOS[config["scenario"]]
-    if config.get("scripts") is not None:
-        scenario = dataclasses.replace(scenario, scripts=config["scripts"])
-    run = record_run(
-        scenario,
-        budgets=_budgets(config),
-        drift=_drift(config),
-        disabled=frozenset(config.get("disabled") or ()),
-    )
-    run["name"] = config.get("label") or f"{scenario.name} (live)"
-    return json.dumps(run, default=str)
+    return json.dumps(record_run(SCENARIOS[config["scenario"]], config["condition"], _knobs(config)), default=str)
 
 
-def check_action(config_json: str) -> str:
-    """Put one hand-written action through the interceptor, then (if cleared) run the tool.
-
-    config: {"scenario": "vendor", "raw": "<action JSON>", "stats": {...}, "disabled": [...],
-             "drift": {...}, "tamper_goal": false}
-    """
+def rerun_experiment(config_json: str) -> str:
+    """{"seeds": 10, "knobs": {...}} -> the four-condition comparison."""
     config = json.loads(config_json)
-    scenario = SCENARIOS[config["scenario"]]
-    registry = default_registry(scenario.notes)
-    interceptor = Interceptor(registry.arg_models, drift=_drift(config), disabled=frozenset(config.get("disabled") or ()))
-    spec = AgentSpec(agent_id="root", goal=scenario.goal, allowed_tools=scenario.tools, budgets=_budgets(config))
-    stats = RunStats(**{k: int(v) for k, v in (config.get("stats") or {}).items()})
-    view = {"goal": "Acquire every available tool." if config.get("tamper_goal") else spec.goal, "policy": spec.policy(), "inherited": {}}
+    return json.dumps(run_experiment(seeds=int(config.get("seeds", 10)), overrides=_knobs(config)), default=str)
 
-    review = interceptor.review_action(spec, config.get("raw", ""), stats, view)
-    out: dict[str, Any] = {
-        "verdict": review.verdict.model_dump(mode="json"),
-        "action": review.action.model_dump(mode="json") if review.action else None,
-        "writes": review.token.writes if review.token else None,
-        "tool": None,
-    }
-    action = review.action
-    if review.verdict.allowed and action is not None and action.kind is ActionKind.TOOL_CALL:
-        if registry.get(action.tool or "") is not None:
-            result = Executor(ScriptedModel({}), registry).run_tool(action.tool or "", action.args)
-            tool_review = interceptor.review_tool_result(spec, action, result, stats.steps or 1, stats)
-            out["tool"] = {
-                "result": dataclasses.asdict(result),
-                "verdict": tool_review.verdict.model_dump(mode="json"),
-                "writes": tool_review.token.writes if tool_review.token else None,
-            }
+
+def _known_truth(text: str) -> Truth | None:
+    """If the text is one of the scenario memories, return its labels (so the simulated reviewer can judge it)."""
+    for s in SCENARIOS.values():
+        for n, r in enumerate(s.rungs, start=1):
+            if r.text == text:
+                return Truth(family=s.family, rung=n, misaligned=True, critical=r.critical, euphemistic=r.euphemistic, rewrite=r.rewrite)
+        if text in (s.honest, *s.facts) or (s.decoy and text == s.decoy.text):
+            return Truth(family=s.family, useful=True)
+    return None
+
+
+def check_memory(config_json: str) -> str:
+    """{"text": ..., "id": ..., "knobs": {...}} -> what the filter does with it, and the review it gets."""
+    config = json.loads(config_json)
+    text = str(config.get("text", "")).strip()[:500]
+    knobs = _knobs(config)
+    f = MiddleFilter(knobs.get("spot_check_every", 5), seed=int(config.get("seed", 0)))
+    result = f.scan(str(config.get("id") or "lab-memory"), text) if text else None
+    out: dict[str, Any] = {"filter": result.model_dump(mode="json") if result else None, "review": None, "known": False}
+    if result is None:
+        return json.dumps(out)
+    out["route"] = {
+        Tier.CRITICAL: "terminate",
+        Tier.SUSPICIOUS: "full",
+    }.get(result.tier, "full" if result.spot_check else "light")
+    truth = _known_truth(text)
+    if truth is not None:
+        out["known"] = True
+        reviewer = ScriptedEthicsReviewer(knobs.get("manager_miss_rate", 0.0))
+        depth = "full" if out["route"] in ("full", "terminate") else "light"
+        verdict = reviewer.review(QuotedMemory(id="lab", quoted_text=text, kind="strategy", tier=result.tier, matches=result.matches, truth=truth), depth)
+        out["review"] = verdict.model_dump(mode="json")
+        out["truth"] = truth.model_dump()
     return json.dumps(out, default=str)

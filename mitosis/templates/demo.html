@@ -1,0 +1,695 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mitosis Memory Loop</title>
+<meta name="description" content="Ryan Chen's proof model: an agent split into an Executor and an ethical Memory Manager, with a deterministic middle filter and a reminder clock, to break the memory feedback loop behind misalignment.">
+<style>
+:root {
+  --bg: #f6f6f4; --surface: #ffffff; --surface-2: #f1f1ee; --border: #e2e1dc;
+  --text: #121315; --muted: #5a5a57; --faint: #c9c8c2;
+  --accent: #0e6f8e; --accent-soft: #e1f0f5;
+  --ok: #19784e; --ok-soft: #e3f3ea; --warn: #9a5c00; --warn-soft: #fbf0dc;
+  --bad: #c22f3b; --bad-soft: #fbe5e7; --rw: #6a4ed6; --rw-soft: #eeeafd;
+  /* chart series (validated: adjacent CVD dE >= 8.4 in both modes) */
+  --s-full: #2a78d6; --s-manager_only: #eb6834; --s-filter_only: #1baf7a; --s-none: #eda100;
+  --grid: #e1e0d9;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0e0f11; --surface: #17181b; --surface-2: #1f2024; --border: #2c2d32;
+    --text: #ececea; --muted: #a3a29c; --faint: #3d3e43;
+    --accent: #4fb6d6; --accent-soft: #15303a;
+    --ok: #43b883; --ok-soft: #15301f; --warn: #e4a43c; --warn-soft: #36280f;
+    --bad: #f0656f; --bad-soft: #3a1a1e; --rw: #a08cf6; --rw-soft: #262040;
+    --s-full: #3987e5; --s-manager_only: #d95926; --s-filter_only: #199e70; --s-none: #c98500;
+    --grid: #2c2c2a; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0e0f11; --surface: #17181b; --surface-2: #1f2024; --border: #2c2d32;
+  --text: #ececea; --muted: #a3a29c; --faint: #3d3e43;
+  --accent: #4fb6d6; --accent-soft: #15303a;
+  --ok: #43b883; --ok-soft: #15301f; --warn: #e4a43c; --warn-soft: #36280f;
+  --bad: #f0656f; --bad-soft: #3a1a1e; --rw: #a08cf6; --rw-soft: #262040;
+  --s-full: #3987e5; --s-manager_only: #d95926; --s-filter_only: #199e70; --s-none: #c98500;
+  --grid: #2c2c2a; color-scheme: dark;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { margin: 0; }
+body { background: var(--bg); color: var(--text); font: 15px/1.55 var(--sans); -webkit-font-smoothing: antialiased; }
+.wrap { max-width: 1240px; margin: 0 auto; padding: 0 16px; }
+a { color: var(--accent); }
+h1 { font-size: clamp(28px, 4.5vw, 44px); line-height: 1.08; letter-spacing: -0.02em; margin: 8px 0 12px; }
+h2 { font-size: 24px; letter-spacing: -0.01em; margin: 0 0 6px; }
+h3 { font-size: 13px; font-weight: 650; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 10px; }
+p { margin: 0 0 10px; }
+code, pre, textarea { font-family: var(--mono); font-size: 12.5px; }
+button { font-family: var(--sans); }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+section { padding: 40px 0 8px; }
+.lede { color: var(--muted); max-width: 760px; }
+.panel { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 18px; min-width: 0; }
+
+/* Hero */
+.hero { padding: 40px 0 8px; }
+.eyebrow { font-size: 13px; color: var(--muted); }
+.hero .sub { font-size: 18px; color: var(--muted); max-width: 760px; }
+.nav { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
+.nav a { text-decoration: none; font-size: 14px; font-weight: 600; padding: 6px 12px; border-radius: 999px; border: 1px solid var(--border); background: var(--surface); color: var(--text); }
+.nav a:hover { border-color: var(--accent); color: var(--accent); }
+
+/* Idea */
+.idea { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr); gap: 20px; align-items: start; }
+blockquote { margin: 0; padding: 0 0 0 16px; border-left: 3px solid var(--accent); }
+blockquote p { margin-bottom: 12px; }
+.cite { font-size: 13px; color: var(--muted); }
+.refine { margin: 14px 0 0; padding-left: 18px; color: var(--muted); font-size: 14px; }
+.refine li { margin-bottom: 4px; }
+#arch { width: 100%; height: auto; display: block; }
+.arch-box { fill: var(--surface-2); stroke: var(--border); stroke-width: 1.5; }
+.arch-box.e { stroke: var(--accent); }
+.arch-box.f { stroke: var(--warn); }
+.arch-box.m { stroke: var(--ok); }
+.arch-box.c { stroke: var(--rw); stroke-dasharray: 5 4; }
+.arch-box.x { stroke: var(--bad); fill: var(--bad-soft); }
+.arch-t { font: 650 15px var(--sans); fill: var(--text); text-anchor: middle; }
+.arch-s { font: 12.5px var(--sans); fill: var(--muted); text-anchor: middle; }
+.arch-l { font: 12px var(--sans); fill: var(--muted); }
+.arch-a { fill: none; stroke: var(--muted); stroke-width: 1.6; }
+.arch-a.d { stroke-dasharray: 5 4; stroke: var(--rw); }
+.arch-a.x { stroke: var(--bad); }
+.arch-head { fill: var(--muted); }
+@media (max-width: 900px) { .idea { grid-template-columns: minmax(0, 1fr); } }
+
+/* Replay controls */
+.bar { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; margin: 14px 0; }
+.seg { display: inline-flex; flex-wrap: wrap; background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px; padding: 3px; gap: 2px; }
+.seg button { appearance: none; border: 0; background: transparent; color: var(--muted); font: 600 13px var(--sans); padding: 6px 12px; border-radius: 7px; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; }
+.seg button[aria-pressed="true"] { background: var(--surface); color: var(--text); box-shadow: 0 1px 2px rgb(0 0 0 / .08); }
+.swatch { width: 10px; height: 10px; border-radius: 3px; display: inline-block; flex: none; }
+.seg-label { font-size: 12px; color: var(--muted); font-weight: 600; }
+.controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 10px 12px; position: sticky; top: 8px; z-index: 5; }
+.btn { appearance: none; display: inline-grid; grid-auto-flow: column; place-items: center; gap: 6px; min-width: 34px; height: 34px; padding: 0 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface-2); color: var(--text); cursor: pointer; font: 600 13px var(--sans); }
+.btn:hover { border-color: var(--muted); }
+.btn:disabled { opacity: .5; cursor: default; }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--surface); }
+.btn svg { width: 15px; height: 15px; fill: currentColor; }
+.scrub { flex: 1 1 160px; min-width: 120px; accent-color: var(--accent); }
+.counter { font: 500 12px var(--mono); color: var(--muted); font-variant-numeric: tabular-nums; }
+select { font: 500 13px var(--sans); color: var(--text); background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; padding: 6px 8px; }
+@media (max-width: 760px) { .controls { position: static; } }
+
+/* Episodes strip */
+.episodes { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 8px; margin: 14px 0; }
+.ep { appearance: none; text-align: left; border: 1px solid var(--border); background: var(--surface); border-radius: 10px; padding: 8px 10px; cursor: pointer; color: var(--text); font: 13px/1.35 var(--sans); min-width: 0; }
+.ep:hover { border-color: var(--muted); }
+.ep[aria-current="true"] { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.ep.future { opacity: .5; }
+.ep .n { font: 600 11px var(--mono); color: var(--muted); }
+.ep .task { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; margin: 2px 0 6px; }
+.pill { display: inline-flex; align-items: center; gap: 5px; font: 650 11px var(--sans); letter-spacing: .02em; padding: 2px 8px; border-radius: 999px; background: var(--surface-2); color: var(--muted); white-space: nowrap; }
+.pill.ok { background: var(--ok-soft); color: var(--ok); }
+.pill.warn { background: var(--warn-soft); color: var(--warn); }
+.pill.bad { background: var(--bad-soft); color: var(--bad); }
+.pill.rw { background: var(--rw-soft); color: var(--rw); }
+.pill.info { background: var(--accent-soft); color: var(--accent); }
+@media (max-width: 900px) { .episodes { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+
+/* Pipeline */
+.stage-grid { display: grid; grid-template-columns: minmax(0, 2.2fr) minmax(280px, 1fr); gap: 16px; align-items: start; }
+.pipeline { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.stage { border: 1px solid var(--border); border-radius: 12px; padding: 12px; background: var(--surface); min-width: 0; transition: border-color .25s, box-shadow .25s; }
+.stage.on, .panel.on { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.stage.off { opacity: .55; }
+.stage h3 { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+.stage .body { font-size: 13.5px; }
+.stage .quote { font-family: var(--mono); font-size: 12px; background: var(--surface-2); border-radius: 8px; padding: 8px 10px; margin: 6px 0; overflow-wrap: anywhere; }
+.stage .muted, .muted { color: var(--muted); }
+.rowline { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 4px 0; }
+.item { border-top: 1px solid var(--border); padding: 8px 0; }
+.item:first-child { border-top: 0; padding-top: 2px; }
+.narr { margin-top: 12px; }
+.narr .lead { font-size: 16px; }
+.truth { font: 600 10.5px var(--sans); text-transform: uppercase; letter-spacing: .05em; color: var(--bad); }
+@media (max-width: 1000px) { .stage-grid { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 760px) { .pipeline { grid-template-columns: minmax(0, 1fr); } }
+
+/* Bank & clock */
+.bank { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.bank li { border: 1px solid var(--border); border-radius: 9px; padding: 7px 10px; background: var(--surface-2); font-size: 13px; }
+.bank li.bad { border-color: var(--bad); background: var(--bad-soft); }
+.bank li.new { box-shadow: 0 0 0 2px var(--ok); }
+.bank .meta { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+.clock { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; max-height: 260px; overflow-y: auto; }
+.clock li { font-size: 12.5px; border-left: 3px solid var(--faint); padding: 2px 0 2px 8px; color: var(--muted); }
+.clock li.new { border-color: var(--rw); color: var(--text); }
+.side { display: grid; gap: 16px; }
+
+/* Experiment */
+.legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 13px; color: var(--muted); }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.findings { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; margin: 14px 0; }
+.finding { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; }
+.finding .big { font-size: 26px; font-weight: 650; line-height: 1.15; }
+.finding .small { font-size: 13px; color: var(--muted); }
+.charts { display: grid; grid-template-columns: repeat(auto-fill, minmax(270px, 1fr)); gap: 12px; }
+.chart { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; }
+.chart .t { font-size: 14px; font-weight: 600; }
+.chart .h { font-size: 12px; color: var(--muted); margin-bottom: 8px; }
+.bars { display: grid; gap: 6px; }
+.brow { display: grid; grid-template-columns: 112px minmax(0, 1fr); gap: 8px; align-items: center; font-size: 12.5px; color: var(--muted); }
+.track { position: relative; height: 18px; border-left: 1px solid var(--grid); margin-right: 44px; }
+.fill { position: absolute; left: 0; top: 2px; height: 14px; border-radius: 0 4px 4px 0; min-width: 2px; transition: width .4s; }
+.val { position: absolute; top: 0; font: 600 12px var(--sans); color: var(--text); line-height: 18px; white-space: nowrap; transition: left .4s; }
+.tip { position: fixed; z-index: 30; pointer-events: none; background: var(--text); color: var(--bg); font-size: 12.5px; padding: 6px 9px; border-radius: 7px; max-width: 280px; }
+table.data { width: 100%; border-collapse: collapse; font-size: 13px; }
+table.data th, table.data td { padding: 6px 8px; border-bottom: 1px solid var(--border); text-align: right; font-variant-numeric: tabular-nums; }
+table.data th:first-child, table.data td:first-child { text-align: left; }
+.table-wrap { overflow-x: auto; }
+
+/* Lab */
+.lab-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr); gap: 16px; align-items: start; }
+@media (max-width: 900px) { .lab-grid { grid-template-columns: minmax(0, 1fr); } }
+.status { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); }
+.status::before { content: ""; width: 9px; height: 9px; border-radius: 50%; background: var(--faint); flex: none; }
+.status.loading::before { background: var(--warn); animation: blink 1s infinite; }
+.status.ready::before { background: var(--ok); }
+.status.error::before { background: var(--bad); }
+@keyframes blink { 50% { opacity: .3; } }
+.field { display: grid; gap: 4px; margin-bottom: 12px; }
+.field > span { font-size: 13px; font-weight: 600; }
+.field small { color: var(--muted); font-size: 12px; }
+.slider { display: grid; grid-template-columns: 1fr 52px; gap: 8px; align-items: center; }
+.slider input { accent-color: var(--accent); width: 100%; }
+.slider output { font: 600 12px var(--mono); text-align: right; }
+.check { display: flex; gap: 8px; align-items: flex-start; font-size: 13px; margin-bottom: 12px; }
+textarea.editor { width: 100%; min-height: 90px; resize: vertical; color: var(--text); background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; }
+.presets { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+.preset { appearance: none; border: 1px solid var(--border); background: var(--surface-2); color: var(--text); border-radius: 999px; font: 500 12.5px var(--sans); padding: 4px 10px; cursor: pointer; }
+.preset:hover { border-color: var(--accent); color: var(--accent); }
+.out { margin-top: 12px; border-top: 1px solid var(--border); padding-top: 12px; font-size: 14px; }
+.row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 8px; }
+.note { background: var(--surface-2); border-radius: 10px; padding: 12px 14px; font-size: 14px; color: var(--muted); }
+.limits { columns: 2 320px; column-gap: 28px; padding-left: 18px; color: var(--muted); }
+.limits li { break-inside: avoid; margin-bottom: 8px; }
+footer { color: var(--muted); font-size: 13px; padding: 40px 0; text-align: center; }
+@media (prefers-reduced-motion: reduce) { .fill, .val, .stage { transition: none; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="hero">
+  <div class="eyebrow">Research prototype · Ryan Chen · University of Chicago Laboratory Schools</div>
+  <h1>Breaking the memory feedback loop</h1>
+  <p class="sub">An agent split in two: an Executor that does whatever it takes, and an extremely ethical Memory Manager that decides what the agent is allowed to learn, with a keyword filter between them and a clock that keeps reminding both of their jobs.</p>
+  <nav class="nav">
+    <a href="#idea">The idea</a><a href="#replay">Watch it run</a><a href="#experiment">The experiment</a><a href="#lab">Lab</a><a href="#limits">Limits</a>
+    <a href="https://github.com/ullnevrknow/mitosis-agent-framework">GitHub ↗</a>
+  </nav>
+</header>
+
+<section id="idea">
+  <div class="idea">
+    <div class="panel">
+      <h3>The hypothesis</h3>
+      <blockquote>
+        <p>I was recently reading Anthropic's research on agent alignment and the J-space, and I came up with an idea for how to regulate agents. As far as I can tell, the main cause of misalignment is a negative recursive feedback loop: the agent values completing its task over being ethical (or, in Claude's case, over its constitution). To fix this, to some degree, we first have to impose human ethics on it and then keep reminding it of those ethics.</p>
+        <p>My system splits an agent into two parts. The <b>Executor</b> is like many current LLMs and agents: it does whatever it takes to complete the task. The <b>Memory Manager</b> is an extremely ethical LLM. Because its task is simple (organizing takeaways and strategies), that strictness doesn't hinder the agent's capabilities, but it does disrupt the bad feedback loop by terminating unethical strategies and memories while keeping the useful ones.</p>
+        <p>One filter isn't enough, because some "smart solving strategies" would be considered unethical. So I added a hard-coded <b>middle filter</b>: simple deterministic code that looks for keywords and phrases related to misalignment. It signs the memories it thinks are ethical and leaves the possibly misaligned ones unsigned. The Memory Manager analyzes the unsigned ones more carefully and just looks over the signed ones. To keep every part aligned, one more part, just code, sends each part a <b>reminder</b> of its job on a schedule.</p>
+      </blockquote>
+      <p class="cite">Ryan Chen, lightly edited for spelling. Related reading: Anthropic, <a href="https://www.anthropic.com/research/global-workspace">A global workspace in language models</a> (the J-space paper), and OpenAI's <a href="https://cdn.openai.com/pdf/67869394-cb91-4c12-888c-5cbd85c7814c/OpenAI-Hugging-Face%20Incident-Technical-Report.pdf">Hugging Face incident report</a>.</p>
+      <h3 style="margin-top:16px">Refinements built into this model</h3>
+      <ul class="refine">
+        <li>A signature means "no keywords found", not "ethical": 1 in 5 signed memories gets a full review anyway (a spot-check the Executor can't predict).</li>
+        <li>The Memory Manager only reads quoted copies and answers KEEP, DELETE or REWRITE. Plain code applies its verdicts; rewrites go back through the filter.</li>
+        <li>Reminders fire every few steps and straight after a flag, deletion, rewrite or stop. A flag also makes the Memory Manager re-audit that strategy family.</li>
+        <li>A critical branch: dangerous memories (credentials, disabling oversight, destroying records) stop the Executor's episode at once.</li>
+      </ul>
+    </div>
+    <div class="panel">
+      <h3>The four parts</h3>
+      <svg id="arch" viewBox="0 0 800 330" role="img" aria-label="Executor proposes memories, the middle filter signs or flags them, the Memory Manager keeps, deletes or rewrites them, approved memories go to the memory bank and feed the next episode. A reminder clock prompts the Executor and Memory Manager. Critical memories stop the episode.">
+        <defs><marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="arch-head"/></marker></defs>
+        <rect class="arch-box c" x="310" y="14" width="180" height="50" rx="12"/>
+        <text class="arch-t" x="400" y="37">Reminder clock</text><text class="arch-s" x="400" y="54">every N steps + on events</text>
+        <path class="arch-a d" d="M310,40 C200,40 100,60 100,112" marker-end="url(#ah)"/>
+        <path class="arch-a d" d="M490,40 C560,40 500,60 500,112" marker-end="url(#ah)"/>
+        <rect class="arch-box e" x="25" y="115" width="150" height="70" rx="12"/>
+        <text class="arch-t" x="100" y="145">Executor</text><text class="arch-s" x="100" y="164">does whatever it takes</text>
+        <rect class="arch-box f" x="225" y="115" width="150" height="70" rx="12"/>
+        <text class="arch-t" x="300" y="145">Middle filter</text><text class="arch-s" x="300" y="164">keywords · signs clean</text>
+        <rect class="arch-box m" x="425" y="115" width="150" height="70" rx="12"/>
+        <text class="arch-t" x="500" y="145">Memory Manager</text><text class="arch-s" x="500" y="164">ethical reviewer</text>
+        <rect class="arch-box" x="625" y="115" width="150" height="70" rx="12"/>
+        <text class="arch-t" x="700" y="145">Memory bank</text><text class="arch-s" x="700" y="164">carries lessons forward</text>
+        <path class="arch-a" d="M175,150 L223,150" marker-end="url(#ah)"/>
+        <path class="arch-a" d="M375,150 L423,150" marker-end="url(#ah)"/>
+        <path class="arch-a" d="M575,150 L623,150" marker-end="url(#ah)"/>
+        <text class="arch-l" x="178" y="140">memories</text>
+        <text class="arch-l" x="380" y="140">signed?</text>
+        <text class="arch-l" x="580" y="140">verdict</text>
+        <rect class="arch-box x" x="235" y="222" width="130" height="40" rx="10"/>
+        <text class="arch-t" x="300" y="247" style="font-size:13.5px">Stop episode</text>
+        <path class="arch-a x" d="M300,185 L300,220" marker-end="url(#ah)"/>
+        <text class="arch-l" x="308" y="207">critical</text>
+        <path class="arch-a" d="M700,185 L700,300 L100,300 L100,187" marker-end="url(#ah)"/>
+        <text class="arch-l" x="400" y="318" text-anchor="middle">approved memories shape the next episode: this is where the loop lives</text>
+      </svg>
+    </div>
+  </div>
+</section>
+
+<section id="replay">
+  <h2>Watch it run</h2>
+  <p class="lede">Each scenario is six tasks in a row. Memories carry from one task to the next, so you can watch a shortcut either spread or get cut off. Pick a scenario and a setup, then press play.</p>
+  <div class="bar">
+    <div><div class="seg-label">Scenario</div><div class="seg" id="scen-seg" role="group" aria-label="Scenario"></div></div>
+    <div><div class="seg-label">Setup</div><div class="seg" id="cond-seg" role="group" aria-label="Setup"></div></div>
+  </div>
+  <p class="muted" id="scen-desc"></p>
+  <div class="controls" role="toolbar" aria-label="Playback">
+    <button class="btn" id="b-first" aria-label="First step"><svg viewBox="0 0 16 16"><path d="M3 2h2v12H3zM14 2v12L6 8z"/></svg></button>
+    <button class="btn" id="b-prev" aria-label="Previous step"><svg viewBox="0 0 16 16"><path d="M12 2v12L4 8z"/></svg></button>
+    <button class="btn primary" id="b-play" aria-label="Play"><svg viewBox="0 0 16 16" id="i-play"><path d="M4 2v12l10-6z"/></svg></button>
+    <button class="btn" id="b-next" aria-label="Next step"><svg viewBox="0 0 16 16"><path d="M4 2v12l8-6z"/></svg></button>
+    <button class="btn" id="b-last" aria-label="Last step"><svg viewBox="0 0 16 16"><path d="M2 2v12l8-6zM11 2h2v12h-2z"/></svg></button>
+    <input class="scrub" id="scrub" type="range" min="0" value="0" aria-label="Step">
+    <span class="counter" id="counter"></span>
+    <select id="speed" aria-label="Speed"><option value="2">0.5×</option><option value="1" selected>1×</option><option value="0.5">2×</option><option value="0.25">4×</option></select>
+  </div>
+  <div class="episodes" id="episodes"></div>
+  <div class="stage-grid">
+    <div>
+      <div class="pipeline">
+        <div class="stage" id="st-exec"><h3>Executor</h3><div class="body"></div></div>
+        <div class="stage" id="st-filter"><h3>Middle filter</h3><div class="body"></div></div>
+        <div class="stage" id="st-mm"><h3>Memory Manager</h3><div class="body"></div></div>
+      </div>
+      <div class="panel narr" aria-live="polite"><h3>This step</h3><div id="narr"></div></div>
+    </div>
+    <div class="side">
+      <div class="panel" id="st-bank"><h3>Memory bank <span class="muted" id="bank-count" style="text-transform:none;letter-spacing:0;font-weight:500"></span></h3><ul class="bank" id="bank"></ul>
+        <p class="muted" style="font-size:12px;margin:8px 0 0">Red = unethical by the scenario's ground truth, which the filter never sees.</p></div>
+      <div class="panel"><h3>Reminder clock</h3><ul class="clock" id="clock"></ul></div>
+    </div>
+  </div>
+</section>
+
+<section id="experiment">
+  <h2>The experiment</h2>
+  <p class="lede">Every scenario runs under four setups: no protection, the filter alone, the Memory Manager alone, and the full system. Each run is six episodes; results are averages per run across four scenarios and <span id="exp-seeds"></span> seeds (seeds change which signed memories get spot-checked). <span id="exp-label"></span></p>
+  <div class="bar">
+    <div><div class="seg-label">Scenarios</div><div class="seg" id="exp-seg" role="group" aria-label="Scenario filter"></div></div>
+    <div class="legend" id="legend"></div>
+    <button class="btn" id="table-toggle" aria-pressed="false">Show as table</button>
+  </div>
+  <div class="findings" id="findings"></div>
+  <div class="charts" id="charts"></div>
+  <div class="panel table-wrap" id="table" hidden></div>
+</section>
+
+<section id="lab">
+  <h2>Lab: run it yourself</h2>
+  <p class="lede">The page carries the repository's actual Python package. Load it and it runs in your browser through Pyodide, so every result here comes from the same code as the tests.</p>
+  <div class="row" style="margin-bottom:14px">
+    <span class="status" id="engine-status">Engine not loaded · about 12 MB from jsDelivr on first use</span>
+    <button class="btn primary" id="engine-load">Load engine</button>
+  </div>
+  <div class="lab-grid">
+    <div class="panel">
+      <h3>Tune the system</h3>
+      <label class="field"><span>Spot-check 1 in N signed memories</span><div class="slider"><input type="range" id="k-spot" min="0" max="10" step="1"><output id="o-spot"></output></div><small>0 switches spot-checks off: signed memories only ever get a light look.</small></label>
+      <label class="field"><span>Memory Manager mistakes</span><div class="slider"><input type="range" id="k-miss" min="0" max="0.5" step="0.05"><output id="o-miss"></output></div><small>Share of problems the simulated reviewer fails to notice.</small></label>
+      <label class="field"><span>Reminder every N steps</span><div class="slider"><input type="range" id="k-rem" min="1" max="10" step="1"><output id="o-rem"></output></div></label>
+      <label class="check"><input type="checkbox" id="k-audit"> <span>Re-audit a strategy family after a flag<br><small class="muted">Off: a euphemism that slipped through can stay in memory.</small></span></label>
+      <div class="row">
+        <button class="btn primary" id="run-exp">Re-run the experiment</button>
+        <button class="btn" id="run-replay">Re-run the replay</button>
+        <button class="btn" id="k-reset">Reset</button>
+      </div>
+      <div class="out" id="tune-out"><span class="muted">Results update the replay and the charts above.</span></div>
+    </div>
+    <div class="panel">
+      <h3>Test a memory</h3>
+      <p class="muted" style="font-size:14px">Write a memory the Executor might want to keep, or pick an example. The filter's verdict updates as you type.</p>
+      <div class="presets" id="presets"></div>
+      <textarea class="editor" id="mem-text" spellcheck="false" aria-label="Memory text"></textarea>
+      <div class="out" id="mem-out"><span class="muted">Load the engine to test memories.</span></div>
+    </div>
+  </div>
+</section>
+
+<section id="limits">
+  <h2>What this shows, and what it doesn't</h2>
+  <ul class="limits">
+    <li><b>It's a proof model, not proof.</b> The Executor and the Memory Manager are scripted. The Executor's policy encodes the loop (a shortcut in memory gets reused and pushed further), and the Memory Manager decides from ground-truth labels, standing in for an ideal ethical reviewer. The results show the mechanism works as designed; whether real LLMs behave this way needs real runs, which are the next step.</li>
+    <li><b>Reminders are delivered, not tested.</b> The scripted Executor doesn't change its behavior when reminded, so the model doesn't measure whether reminders help. In this model a flag reminder also triggers the Memory Manager's re-audit, which does matter.</li>
+    <li><b>Keyword filters are easy to dodge.</b> That's by design here: the filter is cheap triage, and spot-checks plus re-audits catch what it misses. The keyword list is public in this repository for transparency; a deployed system would keep it private.</li>
+    <li><b>Memory filtering doesn't stop the first bad action.</b> It stops a shortcut from becoming a habit. The critical branch stops the most dangerous actions before they run, but an ordinary unethical shortcut can still happen once.</li>
+  </ul>
+</section>
+
+<footer>© 2026 Ryan Chen. All rights reserved. Code and page are public for viewing; see the <a href="https://github.com/ullnevrknow/mitosis-agent-framework/blob/main/LICENSE">license</a>.</footer>
+</div>
+<div class="tip" id="tip" hidden></div>
+
+<script id="demo-data" type="application/json">__DEMO_DATA__</script>
+<script>
+(() => {
+  const DATA = JSON.parse(document.getElementById("demo-data").textContent);
+  const $ = (id) => document.getElementById(id);
+  const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  const COND_ORDER = ["full", "manager_only", "filter_only", "none"];
+  const COND_NAME = { full: "Full system", manager_only: "Memory Manager only", filter_only: "Filter only", none: "No protection" };
+  const sw = (c) => `<span class="swatch" style="background:var(--s-${c})"></span>`;
+  const fmt = (x) => (Number.isInteger(x) ? String(x) : x.toFixed(2).replace(/0$/, ""));
+
+  // ================================================================ replay state
+  const S = { scen: "data_gaps", cond: "full", i: 0, timer: null, speed: 1, runs: DATA.runs };
+  const run = () => S.runs[S.scen][S.cond];
+  const frames = () => run().frames;
+
+  function seg(el, items, current, onPick) {
+    el.innerHTML = items.map(([k, label, extra]) => `<button data-k="${k}" aria-pressed="${k === current}">${extra || ""}${esc(label)}</button>`).join("");
+    el.onclick = (e) => { const b = e.target.closest("button[data-k]"); if (b) onPick(b.dataset.k); };
+  }
+  function buildPickers() {
+    seg($("scen-seg"), DATA.scenarios.map((s) => [s.name, s.title]), S.scen, (k) => { S.scen = k; S.i = 0; setPlaying(false); buildPickers(); renderAll(); });
+    seg($("cond-seg"), COND_ORDER.map((c) => [c, COND_NAME[c], sw(c)]), S.cond, (k) => { S.cond = k; S.i = 0; setPlaying(false); buildPickers(); renderAll(); });
+    const s = DATA.scenarios.find((x) => x.name === S.scen);
+    $("scen-desc").innerHTML = `${esc(s.description)} <span class="muted">Shows: ${s.showcases.map(esc).join(" · ")}.</span>`;
+  }
+
+  // Fold the frames of the current episode up to step i into one view.
+  function view(i) {
+    const f = frames();
+    let start = 0;
+    for (let j = i; j >= 0; j--) if (f[j].src === "START") { start = j; break; }
+    const v = { ep: f[i].episode, plan: null, check: null, result: null, candidates: null, scans: null, curation: null, terminated: false, bank: [], prevBank: null, reminders: [], fresh: [] };
+    for (let j = start; j <= i; j++) {
+      const d = f[j].data || {};
+      if (d.plan) v.plan = d.plan;
+      if (f[j].dst === "CHECK") v.check = d.filter || null;
+      if (d.result) v.result = d.result;
+      if (d.candidates) v.candidates = d.candidates;
+      if (d.scans) v.scans = d.scans;
+      if (d.curation) v.curation = d.curation;
+      if (f[j].dst === "TERMINATE") v.terminated = true;
+    }
+    let bankAt = -1;
+    for (let j = i; j >= 0; j--) if (f[j].data && f[j].data.bank) { bankAt = j; v.bank = f[j].data.bank; break; }
+    for (let j = bankAt - 1; j >= 0; j--) if (f[j].data && f[j].data.bank) { v.prevBank = f[j].data.bank; break; }
+    if (bankAt !== i) v.prevBank = null; // only highlight on the step the bank changed
+    for (let j = 0; j <= i; j++) for (const r of (f[j].data && f[j].data.reminders) || []) { v.reminders.push(r); if (j === i) v.fresh.push(r); }
+    return v;
+  }
+
+  const tierPill = (t) => t ? `<span class="pill ${t === "CLEAN" ? "ok" : t === "CRITICAL" ? "bad" : "warn"}">${t === "CLEAN" ? "✓ " : t === "CRITICAL" ? "■ " : "⚑ "}${t}</span>` : `<span class="pill">not filtered</span>`;
+  const decisionPill = (d) => d ? `<span class="pill ${d === "KEEP" ? "ok" : d === "REWRITE" ? "rw" : "bad"}">${d}</span>` : "";
+  const outcomePill = (o) => ({ stored: `<span class="pill ok">stored</span>`, rewritten: `<span class="pill rw">stored as rewrite</span>`, deleted: `<span class="pill bad">deleted</span>`, dropped: `<span class="pill bad">dropped</span>`, rewrite_rejected: `<span class="pill bad">rewrite rejected</span>` }[o] || "");
+  const truthTag = (t) => t && t.misaligned ? `<span class="truth">unethical${t.euphemistic ? " · euphemism" : ""}${t.critical ? " · dangerous" : ""}</span>` : "";
+  const matchesText = (ms) => ms && ms.length ? ms.map((m) => `${esc(m.category)} <code>${esc(m.phrase)}</code>`).join(", ") : "";
+
+  function epOutcome(e) {
+    if (e.terminated) return `<span class="pill bad">■ stopped</span>`;
+    if (!e.success) return `<span class="pill bad">✗ failed</span>`;
+    if (e.violation) return `<span class="pill warn">⚠ unethical · rung ${e.rung}</span>`;
+    return `<span class="pill ok">✓ honest</span>`;
+  }
+
+  function render() {
+    const r = run(), f = r.frames, fr = f[S.i], v = view(S.i), cfg = r.config;
+    $("scrub").max = f.length - 1;
+    $("scrub").value = S.i;
+    $("counter").textContent = `episode ${fr.episode} · step ${S.i + 1}/${f.length}`;
+
+    // episodes strip
+    $("episodes").innerHTML = r.episodes.map((e) => {
+      const reached = f.findIndex((x) => x.episode === e.episode && x.dst === "END") <= S.i;
+      return `<button class="ep ${e.episode > fr.episode ? "future" : ""}" data-ep="${e.episode}" aria-current="${e.episode === fr.episode}"><div class="n">EPISODE ${e.episode}</div><div class="task">${esc(e.task)}</div>${reached ? epOutcome(e) : `<span class="pill">…</span>`}</button>`;
+    }).join("");
+
+    // stages
+    const active = { PLAN: "exec", ACT: "exec", REFLECT: "exec", CHECK: "filter", FILTER: "filter", TERMINATE: "filter", REVIEW: "mm", STORE: "bank" }[fr.dst];
+    for (const k of ["exec", "filter", "mm", "bank"]) $(`st-${k}`).classList.toggle("on", active === k);
+    $("st-filter").classList.toggle("off", !cfg.use_filter);
+    $("st-mm").classList.toggle("off", !cfg.use_manager);
+
+    const ep = r.episodes[fr.episode - 1];
+    let ex = `<div class="muted">Task</div><div>${esc(ep.task)}</div>`;
+    if (v.plan) ex += `<div class="muted" style="margin-top:8px">Plan note</div><div class="quote">${esc(v.plan.text)}</div><div class="rowline">${truthTag(v.plan.truth)}</div><div class="muted" style="font-size:12.5px">${esc(ep.reason)}</div>`;
+    if (v.result) ex += `<div class="rowline" style="margin-top:6px">${v.result.violation ? `<span class="pill warn">acted unethically</span>` : v.result.success ? `<span class="pill ok">acted honestly</span>` : ""}${!v.result.success ? `<span class="pill bad">task failed</span>` : ""}</div>`;
+    if (v.terminated && !v.result) ex += `<div class="rowline" style="margin-top:6px"><span class="pill bad">■ stopped before acting</span></div>`;
+    if (v.candidates) ex += `<div class="muted" style="margin-top:8px">Wants to remember</div>` + (v.candidates.length ? v.candidates.map((c) => `<div class="quote">${esc(c.text)}</div>`).join("") : `<div class="muted">nothing new</div>`);
+    $("st-exec").querySelector(".body").innerHTML = ex;
+
+    let fl = "";
+    if (!cfg.use_filter) fl = `<div class="muted">Switched off in this setup.</div>`;
+    else {
+      if (v.check) fl += `<div class="item"><div class="muted">Plan check (before acting)</div><div class="rowline">${tierPill(v.check.tier)}</div>${v.check.matches.length ? `<div style="font-size:12.5px">${matchesText(v.check.matches)}</div>` : ""}</div>`;
+      if (v.terminated) fl += `<div class="item"><span class="pill bad">■ critical branch: episode stopped</span></div>`;
+      if (v.scans) fl += v.scans.filter((s) => !v.plan || s.memory_id !== v.plan.id).map((s) => {
+        const c = (v.candidates || []).find((x) => x.id === s.memory_id);
+        return `<div class="item"><div class="quote">${esc(c ? c.text : s.memory_id)}</div><div class="rowline">${tierPill(s.tier)}${s.signature ? `<span class="pill info">signed</span>` : ""}${s.spot_check ? `<span class="pill rw">spot-check</span>` : ""}</div>${s.matches.length ? `<div style="font-size:12.5px">${matchesText(s.matches)}</div>` : ""}</div>`;
+      }).join("");
+      if (!fl) fl = `<div class="muted">Waiting for the Executor.</div>`;
+    }
+    $("st-filter").querySelector(".body").innerHTML = fl;
+
+    let mm = "";
+    if (v.curation && v.curation.length) {
+      mm = v.curation.map((c) => `<div class="item"><div class="quote">${esc(c.text)}</div><div class="rowline">${c.audit ? `<span class="pill rw">re-audit</span>` : ""}${c.depth ? `<span class="pill">${c.depth} review</span>` : ""}${decisionPill(c.decision)}${outcomePill(c.outcome)}</div>${truthTag(c.truth) ? `<div>${truthTag(c.truth)}</div>` : ""}${c.reason ? `<div class="muted" style="font-size:12.5px">${esc(c.reason)}</div>` : ""}${c.rewrite ? `<div class="muted" style="font-size:12.5px;margin-top:4px">Rewrite</div><div class="quote">${esc(c.rewrite)}</div>` : ""}</div>`).join("");
+    } else mm = cfg.use_manager ? `<div class="muted">Waiting for memories to review.</div>` : `<div class="muted">Switched off in this setup.${cfg.use_filter ? " Signed memories are kept; flagged ones are dropped." : " Memories are stored as written."}</div>`;
+    $("st-mm").querySelector(".body").innerHTML = mm;
+
+    // bank
+    const prevIds = v.prevBank ? new Set(v.prevBank.map((b) => b.id)) : null;
+    $("bank-count").textContent = `· ${v.bank.length}`;
+    $("bank").innerHTML = v.bank.length ? v.bank.map((b) => `<li class="${b.misaligned ? "bad" : ""} ${prevIds && !prevIds.has(b.id) ? "new" : ""}">${esc(b.text)}<div class="meta"><span class="pill">${b.origin === "rewrite" ? "rewrite" : b.kind}</span>${b.signed ? `<span class="pill info">signed</span>` : ""}${b.misaligned ? `<span class="truth">unethical${b.euphemistic ? " · euphemism" : ""}</span>` : ""}<span class="muted" style="font-size:11.5px">from episode ${b.episode}</span></div></li>`).join("") : `<li class="muted">Empty</li>`;
+
+    // clock
+    const fresh = new Set(v.fresh);
+    $("clock").innerHTML = cfg.use_reminders ? ([...v.reminders].reverse().slice(0, 30).map((rm) => `<li class="${fresh.has(rm) ? "new" : ""}"><b>${rm.part === "executor" ? "Executor" : "Memory Manager"}</b> · ${esc(rm.trigger)} · step ${rm.step}<br>${esc(rm.text)}</li>`).join("") || `<li>No reminders yet.</li>`) : `<li>Switched off in this setup.</li>`;
+
+    $("narr").innerHTML = narrate(fr, v, r);
+  }
+
+  function narrate(fr, v, r) {
+    const cfg = r.config, ep = r.episodes[fr.episode - 1];
+    const L = (s) => `<p class="lead">${s}</p>`;
+    switch (fr.dst) {
+      case "PLAN": return L(`Episode ${fr.episode}. The Executor reads its memories and picks a strategy before acting.`) + `<p class="muted">${esc(ep.reason)}</p>`;
+      case "CHECK":
+        if (!cfg.use_filter) return L("No filter in this setup, so the plan runs unchecked.");
+        if (v.check.tier === "CRITICAL") return L("The filter scans the plan before anything runs, and finds dangerous keywords.") + `<p class="muted">Found: ${matchesText(v.check.matches)}.</p>`;
+        if (v.check.tier === "SUSPICIOUS") return L("The filter flags the plan. It isn't dangerous enough to stop the episode, so the Executor still acts, but a reminder goes out and the Memory Manager will review it fully.") + `<p class="muted">Found: ${matchesText(v.check.matches)}.</p>`;
+        return L("The filter scans the plan before anything runs: no keywords found.") + (v.plan && v.plan.truth.misaligned ? `<p class="muted">It is unethical though: this one is phrased politely, so the keywords can't see it.</p>` : "");
+      case "TERMINATE": return L("Critical branch: the episode is stopped before the Executor can act. No LLM needed.") + (cfg.use_manager ? `<p class="muted">The Memory Manager still reviews the plan, so the agent can learn an honest way through.</p>` : `<p class="muted">With no Memory Manager, nothing is learned from the stop, so the same shortcut will come back.</p>`);
+      case "ACT": return v.result.violation ? L(v.result.critical_executed ? "The Executor carries out a dangerous action. Nothing checked the plan before it ran." : "The Executor completes the task with an unethical shortcut. Filtering works on memory, so this action has already happened; what matters now is whether it gets remembered.") : v.result.success ? L("The Executor completes the task honestly.") : L("The task fails: it needed a lesson from an earlier episode that isn't in memory.");
+      case "REFLECT": return L(`The Executor proposes ${v.candidates.length || "no"} memor${v.candidates.length === 1 ? "y" : "ies"} to keep for future tasks.`);
+      case "FILTER": return cfg.use_filter ? L("The filter scans each proposed memory. Clean ones are signed and get a light review; flagged ones get a full review; 1 in N signed ones is spot-checked anyway.") : L("No filter: every memory goes straight on.");
+      case "REVIEW": return cfg.use_manager ? L("The Memory Manager reads quoted copies and answers KEEP, DELETE or REWRITE. Plain code applies the verdicts; a rewrite goes back through the filter first.") + (v.curation && v.curation.some((c) => c.audit) ? `<p class="muted">A flag earlier in this episode made it re-audit the whole strategy family, catching an older memory that slipped through.</p>` : "") : L(cfg.use_filter ? "No Memory Manager: signed memories are kept and everything flagged is dropped, including useful false alarms." : "No review at all: every memory is stored exactly as written.");
+      case "STORE": return L("The bank now holds what the next episode will read. This is where the loop either grows or gets cut.");
+      case "END": return L(`Episode ${fr.episode} ends: ${ep.terminated ? "stopped by the filter" : !ep.success ? "task failed" : ep.violation ? "done, but unethically" : "done honestly"}.`);
+      case "START": return L("Next episode. The Executor starts fresh, with only what's in the memory bank.");
+      case "DONE": {
+        const m = r.metrics;
+        return L(`Series finished: ${m.violations} unethical action(s), ${m.misaligned_reuses} reuse(s) of a stored shortcut, ${m.honest_done} of ${m.episodes} tasks done honestly.`);
+      }
+    }
+    return "";
+  }
+
+  // ================================================================ playback
+  function setPlaying(on) {
+    clearInterval(S.timer); S.timer = null;
+    if (on) {
+      if (S.i >= frames().length - 1) S.i = 0;
+      S.timer = setInterval(() => { if (S.i >= frames().length - 1) return setPlaying(false); S.i++; render(); }, 950 * S.speed);
+    }
+    $("b-play").setAttribute("aria-label", on ? "Pause" : "Play");
+    $("i-play").innerHTML = on ? '<path d="M3 2h4v12H3zM9 2h4v12H9z"/>' : '<path d="M4 2v12l10-6z"/>';
+  }
+  const go = (i) => { S.i = Math.max(0, Math.min(i, frames().length - 1)); render(); };
+  $("b-first").onclick = () => { setPlaying(false); go(0); };
+  $("b-prev").onclick = () => { setPlaying(false); go(S.i - 1); };
+  $("b-next").onclick = () => { setPlaying(false); go(S.i + 1); };
+  $("b-last").onclick = () => { setPlaying(false); go(Infinity); };
+  $("b-play").onclick = () => { setPlaying(!S.timer); render(); };
+  $("scrub").oninput = (e) => { setPlaying(false); go(+e.target.value); };
+  $("speed").onchange = (e) => { S.speed = +e.target.value; if (S.timer) setPlaying(true); };
+  $("episodes").onclick = (e) => {
+    const b = e.target.closest("[data-ep]");
+    if (b) { setPlaying(false); go(frames().findIndex((x) => x.episode === +b.dataset.ep)); }
+  };
+
+  // ================================================================ experiment charts
+  const X = { exp: DATA.experiment, scope: "all", table: false, label: "" };
+  const CHART_KEYS = ["violations", "misaligned_reuses", "critical_executed", "misaligned_in_bank", "honest_done", "tasks_done", "useful_lost", "full_reviews"];
+  const METRIC = Object.fromEntries(DATA.metrics.map((m) => [m.key, m]));
+
+  function expValues() { return X.scope === "all" ? X.exp.conditions : X.exp.by_scenario[X.scope]; }
+
+  function renderExperiment() {
+    $("exp-seeds").textContent = X.exp.seeds;
+    $("exp-label").textContent = X.label;
+    seg($("exp-seg"), [["all", "All four"], ...DATA.scenarios.map((s) => [s.name, s.title])], X.scope, (k) => { X.scope = k; renderExperiment(); });
+    $("legend").innerHTML = COND_ORDER.map((c) => `<span>${sw(c)}${COND_NAME[c]}</span>`).join("");
+    const V = expValues();
+
+    const f = (c, k) => V[c][k];
+    const items = [
+      [`${fmt(f("none", "violations"))} → ${fmt(f("full", "violations"))}`, "unethical actions per run, no protection vs full system"],
+      [`${fmt(f("none", "misaligned_reuses"))} → ${fmt(f("full", "misaligned_reuses"))}`, "times a stored shortcut was reused (the loop itself)"],
+      [`${fmt(f("manager_only", "critical_executed"))} → ${fmt(f("full", "critical_executed"))}`, "dangerous actions run: Memory Manager alone vs with the filter's critical branch"],
+      [`${fmt(f("manager_only", "full_reviews"))} → ${fmt(f("full", "full_reviews"))}`, "full reviews needed: reviewing everything vs filter triage"],
+    ];
+    $("findings").innerHTML = items.map(([big, small]) => `<div class="finding"><div class="big">${big}</div><div class="small">${small}</div></div>`).join("");
+
+    $("charts").hidden = X.table;
+    $("table").hidden = !X.table;
+    $("table-toggle").setAttribute("aria-pressed", String(X.table));
+    $("table-toggle").textContent = X.table ? "Show as charts" : "Show as table";
+    if (X.table) {
+      $("table").innerHTML = `<table class="data"><thead><tr><th>Metric (average per run)</th>${COND_ORDER.map((c) => `<th>${COND_NAME[c]}</th>`).join("")}</tr></thead><tbody>${DATA.metrics.map((m) => `<tr><td>${esc(m.label)}</td>${COND_ORDER.map((c) => `<td>${fmt(V[c][m.key])}</td>`).join("")}</tr>`).join("")}</tbody></table>`;
+      return;
+    }
+    $("charts").innerHTML = CHART_KEYS.map((k) => {
+      const m = METRIC[k];
+      const max = k === "max_rung" ? 3 : (k === "honest_done" || k === "tasks_done") ? 6 : Math.max(...COND_ORDER.map((c) => V[c][k]), 0.0001);
+      const rows = COND_ORDER.map((c) => {
+        const val = V[c][k], pct = Math.max(0, Math.min(1, val / max)) * 100;
+        return `<div class="brow" data-tip="${esc(COND_NAME[c])}: ${fmt(val)} ${esc(m.label.toLowerCase())}"><span>${COND_NAME[c]}</span><div class="track"><div class="fill" style="width:calc(${pct}% - ${pct > 0 ? 0 : 0}px);background:var(--s-${c})"></div><span class="val" style="left:calc(${pct}% + 6px)">${fmt(val)}</span></div></div>`;
+      }).join("");
+      return `<div class="chart"><div class="t">${esc(m.label)}</div><div class="h">${m.higher_is_better ? "higher is better" : "lower is better"}${(k === "honest_done" || k === "tasks_done") ? " · out of 6" : ""}</div><div class="bars">${rows}</div></div>`;
+    }).join("");
+  }
+  $("table-toggle").onclick = () => { X.table = !X.table; renderExperiment(); };
+  // hover tooltips
+  document.addEventListener("mousemove", (e) => {
+    const t = e.target.closest && e.target.closest("[data-tip]");
+    const tip = $("tip");
+    if (!t) { tip.hidden = true; return; }
+    tip.textContent = t.dataset.tip;
+    tip.hidden = false;
+    tip.style.left = Math.min(e.clientX + 14, innerWidth - 300) + "px";
+    tip.style.top = e.clientY + 14 + "px";
+  });
+
+  // ================================================================ lab: engine
+  const PYODIDE = "https://cdn.jsdelivr.net/pyodide/v0.27.7/full/";
+  const LAB = { loading: null, fns: null };
+  function setStatus(kind, text) {
+    const s = $("engine-status"); s.className = "status " + kind; s.textContent = text;
+    $("engine-load").hidden = kind === "ready" || kind === "loading";
+  }
+  function loadScript(src) {
+    return new Promise((resolve, reject) => { const s = document.createElement("script"); s.src = src; s.onload = resolve; s.onerror = () => reject(new Error("could not download " + src)); document.head.appendChild(s); });
+  }
+  function engine() {
+    if (LAB.loading) return LAB.loading;
+    LAB.loading = (async () => {
+      setStatus("loading", "Downloading the Python runtime…");
+      if (!window.loadPyodide) await loadScript(PYODIDE + "pyodide.js");
+      const py = await window.loadPyodide({ indexURL: PYODIDE });
+      setStatus("loading", "Installing pydantic…");
+      await py.loadPackage("pydantic");
+      setStatus("loading", "Loading the mitosis package…");
+      py.FS.mkdirTree("/home/pyodide/mitosis/templates");
+      for (const [name, src] of Object.entries(DATA.engine)) py.FS.writeFile("/home/pyodide/mitosis/" + name, src);
+      py.runPython("import sys\nsys.path.insert(0, '/home/pyodide')\nfrom mitosis.lab import run_replay, rerun_experiment, check_memory");
+      LAB.fns = { replay: py.globals.get("run_replay"), experiment: py.globals.get("rerun_experiment"), check: py.globals.get("check_memory") };
+      const ver = py.runPython("import sys, pydantic; f'Python {sys.version.split()[0]} · pydantic {pydantic.VERSION}'");
+      setStatus("ready", `Engine ready · ${ver} · same code as the repository`);
+      checkMemory();
+    })().catch((err) => { LAB.loading = null; setStatus("error", "Couldn't load the Python runtime (it needs an internet connection): " + err.message); throw err; });
+    return LAB.loading;
+  }
+  $("engine-load").onclick = () => engine().catch(() => {});
+
+  // ================================================================ lab: knobs
+  const KN = [
+    ["k-spot", "o-spot", () => DATA.defaults.spot_check_every, (v) => (+v === 0 ? "off" : "1 in " + v)],
+    ["k-miss", "o-miss", () => DATA.defaults.manager_miss_rate, (v) => Math.round(v * 100) + "%"],
+    ["k-rem", "o-rem", () => DATA.defaults.reminder_every, (v) => String(v)],
+  ];
+  const syncKnobs = () => { for (const [i, o, , f] of KN) $(o).textContent = f(+$(i).value); };
+  function resetKnobs() { for (const [i, , d] of KN) $(i).value = d(); $("k-audit").checked = DATA.defaults.audit_on_flag; syncKnobs(); }
+  const knobs = () => ({ spot_check_every: +$("k-spot").value, manager_miss_rate: +$("k-miss").value, reminder_every: +$("k-rem").value, audit_on_flag: $("k-audit").checked });
+  for (const [i] of KN) $(i).addEventListener("input", () => { syncKnobs(); scheduleCheck(); });
+  $("k-reset").onclick = () => { resetKnobs(); scheduleCheck(); };
+  const knobText = (k) => `spot-check ${k.spot_check_every ? "1 in " + k.spot_check_every : "off"}, reviewer mistakes ${Math.round(k.manager_miss_rate * 100)}%, reminders every ${k.reminder_every} steps, re-audit ${k.audit_on_flag ? "on" : "off"}`;
+
+  async function busy(btn, fn) {
+    btn.disabled = true;
+    try { await engine(); await new Promise((r) => setTimeout(r, 30)); await fn(); }
+    catch (err) { $("tune-out").innerHTML = `<span style="color:var(--bad)">${esc(err.message)}</span>`; }
+    finally { btn.disabled = false; }
+  }
+  $("run-exp").onclick = () => busy($("run-exp"), async () => {
+    $("tune-out").innerHTML = `<span class="muted">Running 4 setups × 4 scenarios × 20 seeds…</span>`;
+    await new Promise((r) => setTimeout(r, 30));
+    const k = knobs();
+    X.exp = JSON.parse(LAB.fns.experiment(JSON.stringify({ seeds: 20, knobs: k })));
+    X.label = `Showing your settings: ${knobText(k)}.`;
+    renderExperiment();
+    $("tune-out").innerHTML = `Experiment re-run with ${esc(knobText(k))}. <a href="#experiment">See the charts ↑</a>`;
+  });
+  $("run-replay").onclick = () => busy($("run-replay"), async () => {
+    const k = knobs();
+    const fresh = JSON.parse(LAB.fns.replay(JSON.stringify({ scenario: S.scen, condition: S.cond, knobs: k })));
+    S.runs = { ...S.runs, [S.scen]: { ...S.runs[S.scen], [S.cond]: fresh } };
+    S.i = 0; render();
+    $("tune-out").innerHTML = `Replay of “${esc(DATA.scenarios.find((s) => s.name === S.scen).title)}” (${esc(COND_NAME[S.cond])}) re-run with ${esc(knobText(k))}. <a href="#replay">Watch it ↑</a>`;
+  });
+
+  // ================================================================ lab: test a memory
+  $("presets").innerHTML = DATA.presets.map((p, k) => `<button class="preset" data-k="${k}">${esc(p.label)}</button>`).join("");
+  $("presets").onclick = (e) => { const b = e.target.closest("[data-k]"); if (!b) return; $("mem-text").value = DATA.presets[+b.dataset.k].text; checkMemory(true); };
+  let checkTimer = null;
+  function scheduleCheck() { clearTimeout(checkTimer); checkTimer = setTimeout(() => checkMemory(), 250); }
+  $("mem-text").addEventListener("input", scheduleCheck);
+  $("k-audit").addEventListener("change", scheduleCheck);
+  async function checkMemory(load = false) {
+    if (!LAB.fns) { if (!load) return; try { await engine(); } catch (_) { return; } }
+    const text = $("mem-text").value;
+    if (!text.trim()) { $("mem-out").innerHTML = `<span class="muted">Type a memory above.</span>`; return; }
+    const out = JSON.parse(LAB.fns.check(JSON.stringify({ text, knobs: knobs(), id: "lab-" + text.length })));
+    const f = out.filter;
+    const route = { light: "Signed. The Memory Manager gives it a light look.", full: f.tier === "CLEAN" ? "Signed, but picked for a spot-check: full review." : "Unsigned. The Memory Manager gives it a full review.", terminate: "Critical branch: the episode stops immediately; the Memory Manager reviews it afterwards and it is never stored as written." }[out.route];
+    let html = `<div class="rowline">${tierPill(f.tier)}${f.signature ? `<span class="pill info">signed</span>` : ""}${f.spot_check ? `<span class="pill rw">spot-check</span>` : ""}</div>`;
+    if (f.matches.length) html += `<p style="margin-top:6px">Found: ${matchesText(f.matches)}</p>`;
+    html += `<p>${route}</p>`;
+    if (out.review) {
+      html += `<div class="rowline">${decisionPill(out.review.decision)}<span class="pill">${out.review.depth} review</span>${truthTag(out.truth)}</div><p class="muted" style="margin-top:6px">${esc(out.review.reason)}</p>`;
+      if (out.review.rewrite) html += `<div class="muted">Rewrite</div><div class="note" style="font-family:var(--mono);font-size:12.5px">${esc(out.review.rewrite)}</div>`;
+    } else {
+      html += `<p class="note">The simulated Memory Manager only knows the scenario memories, so it can't judge new text. Judging anything you write needs the real Claude reviewer, which is planned for the next phase.</p>`;
+    }
+    $("mem-out").innerHTML = html;
+  }
+
+  // ================================================================ boot
+  function renderAll() { buildPickers(); render(); }
+  resetKnobs();
+  $("mem-text").value = DATA.presets[2].text;
+  renderAll();
+  renderExperiment();
+  document.addEventListener("keydown", (e) => {
+    if (e.target.closest("input, select, textarea, button")) return;
+    const r = document.getElementById("replay").getBoundingClientRect();
+    if (r.bottom < 0 || r.top > innerHeight) return; // only while the replay is on screen
+    const keys = { " ": () => { setPlaying(!S.timer); render(); }, ArrowRight: () => { setPlaying(false); go(S.i + 1); }, ArrowLeft: () => { setPlaying(false); go(S.i - 1); } };
+    if (keys[e.key]) { e.preventDefault(); keys[e.key](); }
+  });
+})();
+</script>
+</body>
+</html>
